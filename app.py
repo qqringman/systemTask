@@ -733,65 +733,104 @@ HTML = '''
             <div class="text-center"><div class="spinner-border text-primary"></div><div class="mt-2">分析中...</div></div>
         </div>
 
-        <!-- 設定區 -->
+        <!-- 設定區 - 頁籤 -->
         <div class="row g-2 mb-2">
             <div class="col-md-12">
                 <div class="card">
-                    <div class="card-header py-2"><span class="card-header-title"><i class="bi bi-gear me-1"></i>資料來源設定</span></div>
+                    <div class="card-header py-2">
+                        <ul class="nav nav-tabs card-header-tabs" role="tablist">
+                            <li class="nav-item">
+                                <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tabOutlook" type="button">
+                                    <i class="bi bi-envelope me-1"></i>Outlook 資料夾
+                                </button>
+                            </li>
+                            <li class="nav-item">
+                                <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tabUpload" type="button">
+                                    <i class="bi bi-cloud-upload me-1"></i>上傳 .msg 檔案
+                                </button>
+                            </li>
+                        </ul>
+                    </div>
                     <div class="card-body py-2">
-                        {% if fc > 0 %}<div class="config-ok"><i class="bi bi-check-circle me-1"></i>Outlook 已連接 ({{ fc }} 資料夾)</div>{% endif %}
-                        <div class="row g-2">
-                            <div class="col-md-4">
-                                <label class="form-label small mb-1">選擇 Outlook 資料夾</label>
-                                <div class="tree-box" id="folderTree">
-                                    <div class="tree" id="tree"></div>
-                                </div>
-                                <div class="small text-muted mt-1">已選: <span id="selectedFolder">-</span></div>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small mb-1">開始日期</label>
-                                <input type="date" class="form-control form-control-sm" id="startDate">
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small mb-1">結束日期</label>
-                                <input type="date" class="form-control form-control-sm" id="endDate">
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small mb-1">&nbsp;</label>
-                                <div class="d-flex gap-1">
-                                    <button class="btn btn-primary btn-sm flex-grow-1" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button>
-                                </div>
-                            </div>
-                            <div class="col-md-2">
-                                <label class="form-label small mb-1">&nbsp;</label>
-                                <div class="d-flex gap-1">
-                                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleFilterSettings()"><i class="bi bi-funnel me-1"></i>篩選</button>
-                                    <button class="btn btn-outline-info btn-sm" onclick="toggleReviewMode()"><i class="bi bi-eye me-1"></i>Review</button>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- 篩選設定 -->
-                        <div id="filterSettings" class="mt-2 p-2 bg-light rounded" style="display:none;">
-                            <div class="row g-2">
-                                <div class="col-auto">
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="checkbox" id="excludeMiddlePriority" checked>
-                                        <label class="form-check-label small">排除 Middle priority 以下</label>
+                        <div class="tab-content">
+                            <!-- Outlook 資料夾頁籤 -->
+                            <div class="tab-pane fade show active" id="tabOutlook" role="tabpanel">
+                                {% if fc > 0 %}<div class="config-ok"><i class="bi bi-check-circle me-1"></i>Outlook 已連接 ({{ fc }} 資料夾)</div>{% endif %}
+                                <div class="row g-2">
+                                    <div class="col-md-4">
+                                        <label class="form-label small mb-1">選擇 Outlook 資料夾</label>
+                                        <div class="tree-box" id="folderTree">
+                                            <div class="tree" id="tree"></div>
+                                        </div>
+                                        <div class="small text-muted mt-1">已選: <span id="selectedFolder">-</span></div>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-1">開始日期</label>
+                                        <input type="date" class="form-control form-control-sm" id="startDate">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-1">結束日期</label>
+                                        <input type="date" class="form-control form-control-sm" id="endDate">
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-1">&nbsp;</label>
+                                        <div class="d-flex gap-1">
+                                            <button class="btn btn-primary btn-sm flex-grow-1" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-2">
+                                        <label class="form-label small mb-1">&nbsp;</label>
+                                        <div class="d-flex gap-1">
+                                            <button class="btn btn-outline-secondary btn-sm" onclick="toggleFilterSettings()"><i class="bi bi-funnel me-1"></i>篩選</button>
+                                            <button class="btn btn-outline-info btn-sm" onclick="toggleReviewMode()"><i class="bi bi-eye me-1"></i>Review</button>
+                                        </div>
                                     </div>
                                 </div>
-                                <div class="col-auto">
-                                    <div class="form-check form-check-inline">
-                                        <input class="form-check-input" type="checkbox" id="excludeAfter5pm" checked>
-                                        <label class="form-check-label small">排除下午 5:00 後</label>
+                                <!-- 篩選設定 -->
+                                <div id="filterSettings" class="mt-2 p-2 bg-light rounded" style="display:none;">
+                                    <div class="row g-2">
+                                        <div class="col-auto">
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="excludeMiddlePriority" checked>
+                                                <label class="form-check-label small">排除 Middle priority 以下</label>
+                                            </div>
+                                        </div>
+                                        <div class="col-auto">
+                                            <div class="form-check form-check-inline">
+                                                <input class="form-check-input" type="checkbox" id="excludeAfter5pm" checked>
+                                                <label class="form-check-label small">排除下午 5:00 後</label>
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <!-- 上傳區 -->
-                        <div class="drop-zone py-2 mt-2" id="dropZone">
-                            <i class="bi bi-cloud-upload text-muted"></i>
-                            <span class="small text-muted">拖放 .msg 檔案</span>
-                            <input type="file" id="fileInput" multiple accept=".msg" style="display:none;">
+                            <!-- 上傳 .msg 檔案頁籤 -->
+                            <div class="tab-pane fade" id="tabUpload" role="tabpanel">
+                                <div class="row g-2">
+                                    <div class="col-md-6">
+                                        <div class="drop-zone py-4" id="dropZone">
+                                            <i class="bi bi-cloud-upload fs-1 text-muted"></i>
+                                            <div class="mt-2">拖放 .msg 檔案到此處，或點擊選擇檔案</div>
+                                            <input type="file" id="fileInput" multiple accept=".msg" style="display:none;">
+                                        </div>
+                                        <div id="uploadFileList" class="mt-2 small"></div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <div class="mb-2">
+                                            <label class="form-label small mb-1">篩選設定</label>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="uploadExcludeMiddlePriority" checked>
+                                                <label class="form-check-label small">排除 Middle priority 以下</label>
+                                            </div>
+                                            <div class="form-check">
+                                                <input class="form-check-input" type="checkbox" id="uploadExcludeAfter5pm" checked>
+                                                <label class="form-check-label small">排除下午 5:00 後</label>
+                                            </div>
+                                        </div>
+                                        <button class="btn btn-primary btn-sm" onclick="analyzeUploadedFiles()"><i class="bi bi-search me-1"></i>分析上傳檔案</button>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -802,16 +841,16 @@ HTML = '''
         <div id="reviewMode" style="display:none;">
             <div class="row g-2">
                 <div class="col-md-4">
-                    <div class="card">
+                    <div class="card" style="height:600px;">
                         <div class="card-header"><span class="card-header-title"><i class="bi bi-envelope me-1"></i>郵件列表</span></div>
                         <div class="table-toolbar">
                             <input type="text" class="form-control form-control-sm" placeholder="🔍 搜尋..." id="mailSearch" onkeyup="filterMailList()">
                         </div>
-                        <div id="mailList" style="max-height:500px;overflow-y:auto;"></div>
+                        <div id="mailList" style="flex:1;overflow-y:auto;"></div>
                     </div>
                 </div>
                 <div class="col-md-8">
-                    <div class="card">
+                    <div class="card" style="height:600px;">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-file-text me-1"></i>郵件內容</span>
                             <div class="btn-group btn-group-sm">
@@ -819,13 +858,13 @@ HTML = '''
                                 <button class="btn btn-outline-light btn-sm" id="btnMailText" onclick="setMailViewMode('text')">純文字</button>
                             </div>
                         </div>
-                        <div class="card-body p-0">
+                        <div class="card-body p-0" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
                             <div id="mailHeader" class="p-2 bg-light border-bottom" style="display:none;">
                                 <div><strong>主旨:</strong> <span id="mailSubjectView">-</span></div>
                                 <div><strong>日期:</strong> <span id="mailDateView">-</span></div>
                             </div>
-                            <div id="mailContentHtml" class="mail-preview"><iframe id="mailIframe" style="width:100%;height:500px;border:none;"></iframe></div>
-                            <div id="mailContentText" class="mail-preview" style="display:none;font-family:monospace;white-space:pre-wrap;"></div>
+                            <div id="mailContentHtml" class="mail-preview" style="flex:1;overflow:hidden;"><iframe id="mailIframe" style="width:100%;height:100%;border:none;"></iframe></div>
+                            <div id="mailContentText" class="mail-preview" style="display:none;flex:1;overflow-y:auto;font-family:monospace;white-space:pre-wrap;padding:15px;"></div>
                         </div>
                     </div>
                 </div>
@@ -876,8 +915,8 @@ HTML = '''
                     <div class="card">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-person-exclamation me-1"></i>成員超期天數</span>
-                            <select class="form-select chart-select" style="width:110px" id="chart4Type" onchange="updateChart4()">
-                                <option value="stacked" selected>堆疊長條</option><option value="bar">長條</option>
+                            <select class="form-select chart-select" style="width:120px" id="chart4Type" onchange="updateChart4()">
+                                <option value="stacked" selected>水平堆疊</option><option value="vstacked">垂直堆疊</option><option value="bar">水平長條</option><option value="line">折線圖</option>
                             </select>
                         </div>
                         <div class="card-body py-2"><div class="chart-container"><canvas id="chart4"></canvas></div></div>
@@ -965,12 +1004,15 @@ HTML = '''
             <!-- 成員統計 & 貢獻度 -->
             <div class="row g-2">
                 <div class="col-md-7">
-                    <div class="card" style="min-height:450px;">
+                    <div class="card">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-people me-1"></i>成員統計</span>
-                            <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('member')"><i class="bi bi-download"></i></button>
+                            <div>
+                                <button class="btn btn-outline-light btn-sm me-1" onclick="toggleMemberFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
+                                <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('member')"><i class="bi bi-download me-1"></i>CSV</button>
+                            </div>
                         </div>
-                        <div class="table-toolbar">
+                        <div class="table-toolbar" id="memberFilterBar" style="display:none;">
                             <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="memberSearch" onkeyup="filterAndRenderMemberTable()">
                             <select class="form-select form-select-sm" style="width:130px" id="filterMemberModule" onchange="filterAndRenderMemberTable()"><option value="">全部模組</option></select>
                             <select class="form-select form-select-sm" style="width:110px" id="filterMemberPriority" onchange="filterAndRenderMemberTable()">
@@ -982,8 +1024,9 @@ HTML = '''
                             <select class="form-select form-select-sm" style="width:110px" id="filterMemberOverdue" onchange="filterAndRenderMemberTable()">
                                 <option value="">全部超期</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
                             </select>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="clearMemberFilters()"><i class="bi bi-x-circle"></i></button>
                         </div>
-                        <div class="table-container" style="max-height:350px;overflow-y:auto;">
+                        <div class="table-container" style="height:400px;overflow-y:auto;">
                             <table class="table table-sm data-table mb-0">
                                 <thead>
                                     <tr>
@@ -1003,19 +1046,23 @@ HTML = '''
                     </div>
                 </div>
                 <div class="col-md-5">
-                    <div class="card" style="min-height:450px;">
+                    <div class="card">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-trophy me-1"></i>貢獻度 <small class="text-warning">(含超期減分)</small></span>
-                            <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('contrib')"><i class="bi bi-download"></i></button>
+                            <div>
+                                <button class="btn btn-outline-light btn-sm me-1" onclick="toggleContribFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
+                                <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('contrib')"><i class="bi bi-download me-1"></i>CSV</button>
+                            </div>
                         </div>
-                        <div class="table-toolbar">
+                        <div class="table-toolbar" id="contribFilterBar" style="display:none;">
                             <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="contribSearch" onkeyup="filterAndRenderContribTable()">
                             <select class="form-select form-select-sm" style="width:130px" id="filterContribModule" onchange="filterAndRenderContribTable()"><option value="">全部模組</option></select>
                             <select class="form-select form-select-sm" style="width:110px" id="filterContribOverdue" onchange="filterAndRenderContribTable()">
-                                <option value="">全部</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
+                                <option value="">全部超期</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
                             </select>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="clearContribFilters()"><i class="bi bi-x-circle"></i></button>
                         </div>
-                        <div class="table-container" style="max-height:350px;overflow-y:auto;">
+                        <div class="table-container" style="height:400px;overflow-y:auto;">
                             <table class="table table-sm data-table mb-0">
                                 <thead>
                                     <tr>
@@ -1112,6 +1159,7 @@ HTML = '''
 
         // 資料夾樹 - 預設全部展開
         let firstLeafNode = null;  // 記錄第一個葉節點
+        let preferredNode = null;  // 優先選擇的節點 (Dias-System team 協助事項)
         function buildTree(data, parent, isRoot = true) {
             const ul = document.createElement('ul');
             data.forEach(node => {
@@ -1139,8 +1187,12 @@ HTML = '''
                         document.getElementById('selectedFolder').textContent = node.name;
                     };
                     li.appendChild(item);
-                    // 記錄第一個葉節點
-                    if (!firstLeafNode) firstLeafNode = { item: item, node: node };
+                    // 優先選擇 "Dias-System team 協助事項"，否則記錄第一個葉節點
+                    if (node.name.includes('Dias-System') || node.name.includes('協助事項')) {
+                        preferredNode = { item: item, node: node };
+                    } else if (!firstLeafNode) {
+                        firstLeafNode = { item: item, node: node };
+                    }
                 }
                 ul.appendChild(li);
             });
@@ -1148,12 +1200,13 @@ HTML = '''
         }
         document.getElementById('tree').appendChild(buildTree(treeData, null));
         
-        // 預設選擇第一個資料夾
-        if (firstLeafNode) {
-            firstLeafNode.item.classList.add('selected');
-            selectedEntry = firstLeafNode.node.entry_id;
-            selectedStore = firstLeafNode.node.store_id;
-            document.getElementById('selectedFolder').textContent = firstLeafNode.node.name;
+        // 預設選擇：優先 Dias-System team 協助事項，否則第一個資料夾
+        const defaultNode = preferredNode || firstLeafNode;
+        if (defaultNode) {
+            defaultNode.item.classList.add('selected');
+            selectedEntry = defaultNode.node.entry_id;
+            selectedStore = defaultNode.node.store_id;
+            document.getElementById('selectedFolder').textContent = defaultNode.node.name;
         }
 
         // 切換篩選設定
@@ -1177,6 +1230,36 @@ HTML = '''
             document.getElementById('filterStatus').value = '';
             document.getElementById('filterOverdue').value = '';
             filterAndRenderTaskTable();
+        }
+        
+        // 切換成員統計篩選
+        function toggleMemberFilter() {
+            const el = document.getElementById('memberFilterBar');
+            el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+        }
+        
+        // 清除成員統計篩選
+        function clearMemberFilters() {
+            document.getElementById('memberSearch').value = '';
+            document.getElementById('filterMemberModule').value = '';
+            document.getElementById('filterMemberPriority').value = '';
+            document.getElementById('filterMemberTaskStatus').value = '';
+            document.getElementById('filterMemberOverdue').value = '';
+            filterAndRenderMemberTable();
+        }
+        
+        // 切換貢獻度篩選
+        function toggleContribFilter() {
+            const el = document.getElementById('contribFilterBar');
+            el.style.display = el.style.display === 'none' ? 'flex' : 'none';
+        }
+        
+        // 清除貢獻度篩選
+        function clearContribFilters() {
+            document.getElementById('contribSearch').value = '';
+            document.getElementById('filterContribModule').value = '';
+            document.getElementById('filterContribOverdue').value = '';
+            filterAndRenderContribTable();
         }
         
         // 切換 Review 模式
@@ -1603,6 +1686,7 @@ HTML = '''
             const labels = overdueData.map(c => c.name);
             
             if (type === 'stacked') {
+                // 水平堆疊
                 chart4 = new Chart(ctx, {
                     type: 'bar',
                     data: { labels, datasets: [
@@ -1611,7 +1695,18 @@ HTML = '''
                     ]},
                     options: { maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: true, position: 'top' } }, scales: { x: { stacked: true, beginAtZero: true }, y: { stacked: true } }, onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); } }
                 });
+            } else if (type === 'vstacked') {
+                // 垂直堆疊
+                chart4 = new Chart(ctx, {
+                    type: 'bar',
+                    data: { labels, datasets: [
+                        { label: '已完成超期', data: overdueData.map(c => c.completed_overdue_days || 0), backgroundColor: '#6c757d', stack: 's' },
+                        { label: '未完成超期', data: overdueData.map(c => c.active_overdue_days || 0), backgroundColor: '#dc3545', stack: 's' }
+                    ]},
+                    options: { maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top' } }, scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } }, onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); } }
+                });
             } else if (type === 'line') {
+                // 折線圖
                 chart4 = new Chart(ctx, {
                     type: 'line',
                     data: { labels, datasets: [
@@ -1620,15 +1715,8 @@ HTML = '''
                     ]},
                     options: { maintainAspectRatio: false, plugins: { legend: { display: true, position: 'top' } }, scales: { y: { beginAtZero: true } }, onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); } }
                 });
-            } else if (type === 'doughnut') {
-                const data = overdueData.map(c => c.overdue_days);
-                const colors = ['#FF6B6B', '#FFA500', '#FFE066', '#74C0FC', '#69DB7C', '#B197FC', '#F783AC', '#20C997', '#ADB5BD', '#868E96'];
-                chart4 = new Chart(ctx, {
-                    type: 'doughnut',
-                    data: { labels, datasets: [{ data, backgroundColor: colors.slice(0, labels.length) }] },
-                    options: { maintainAspectRatio: false, plugins: { legend: { display: true, position: 'right' } }, onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); } }
-                });
             } else {
+                // 水平長條
                 const data = overdueData.map(c => c.overdue_days);
                 const maxDays = Math.max(...data);
                 chart4 = new Chart(ctx, {
@@ -1899,21 +1987,50 @@ HTML = '''
         // 檔案上傳
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
+        let uploadedFiles = [];  // 儲存上傳的檔案
         
         dropZone.onclick = () => fileInput.click();
         dropZone.ondragover = e => { e.preventDefault(); dropZone.classList.add('dragover'); };
         dropZone.ondragleave = () => dropZone.classList.remove('dragover');
-        dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); };
-        fileInput.onchange = () => handleFiles(fileInput.files);
+        dropZone.ondrop = e => { e.preventDefault(); dropZone.classList.remove('dragover'); addFiles(e.dataTransfer.files); };
+        fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
         
-        async function handleFiles(files) {
-            if (files.length === 0) return;
-            const formData = new FormData();
-            Array.from(files).forEach(f => { if (f.name.endsWith('.msg')) formData.append('f', f); });
-            if (!formData.has('f')) { alert('請選擇 .msg 檔案'); return; }
+        function addFiles(files) {
+            Array.from(files).forEach(f => {
+                if (f.name.endsWith('.msg') && !uploadedFiles.find(uf => uf.name === f.name)) {
+                    uploadedFiles.push(f);
+                }
+            });
+            renderUploadFileList();
+        }
+        
+        function removeUploadFile(index) {
+            uploadedFiles.splice(index, 1);
+            renderUploadFileList();
+        }
+        
+        function renderUploadFileList() {
+            const el = document.getElementById('uploadFileList');
+            if (uploadedFiles.length === 0) {
+                el.innerHTML = '<span class="text-muted">尚未選擇檔案</span>';
+                return;
+            }
+            el.innerHTML = uploadedFiles.map((f, i) => `
+                <div class="d-flex justify-content-between align-items-center p-1 border-bottom">
+                    <span><i class="bi bi-file-earmark-text me-1"></i>${f.name}</span>
+                    <button class="btn btn-sm btn-link text-danger p-0" onclick="removeUploadFile(${i})"><i class="bi bi-x-circle"></i></button>
+                </div>
+            `).join('');
+        }
+        
+        async function analyzeUploadedFiles() {
+            if (uploadedFiles.length === 0) { alert('請先選擇 .msg 檔案'); return; }
             
-            const excludeMiddlePriority = document.getElementById('excludeMiddlePriority').checked;
-            const excludeAfter5pm = document.getElementById('excludeAfter5pm').checked;
+            const formData = new FormData();
+            uploadedFiles.forEach(f => formData.append('f', f));
+            
+            const excludeMiddlePriority = document.getElementById('uploadExcludeMiddlePriority').checked;
+            const excludeAfter5pm = document.getElementById('uploadExcludeAfter5pm').checked;
             formData.append('exclude_middle_priority', excludeMiddlePriority);
             formData.append('exclude_after_5pm', excludeAfter5pm);
             
@@ -1923,11 +2040,15 @@ HTML = '''
                 const data = await r.json();
                 if (data.error) throw new Error(data.error);
                 resultData = data;
+                fillFilterOptions();
                 updateUI();
                 document.getElementById('statsMode').style.display = 'block';
             } catch (e) { alert('錯誤: ' + e.message); }
             document.getElementById('loading').style.display = 'none';
         }
+
+        // 初始化上傳檔案列表顯示
+        renderUploadFileList();
 
         document.getElementById('detailModal').addEventListener('hidden.bs.modal', () => { currentModal = null; });
     </script>
