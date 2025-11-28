@@ -849,11 +849,14 @@ HTML = '''
             <div class="row g-2">
                 <div class="col-md-4">
                     <div class="card" style="height:600px;">
-                        <div class="card-header"><span class="card-header-title"><i class="bi bi-envelope me-1"></i>郵件列表</span></div>
+                        <div class="card-header">
+                            <span class="card-header-title"><i class="bi bi-envelope me-1"></i>郵件列表</span>
+                            <small id="reviewMailCount" class="text-white-50"></small>
+                        </div>
                         <div class="table-toolbar">
                             <input type="text" class="form-control form-control-sm" placeholder="🔍 搜尋..." id="mailSearch" onkeyup="filterMailList()">
                         </div>
-                        <div id="mailList" style="flex:1;overflow-y:auto;"></div>
+                        <div id="mailList" style="flex:1;overflow-y:auto;" onscroll="onMailListScroll(event)"></div>
                     </div>
                 </div>
                 <div class="col-md-8">
@@ -869,6 +872,7 @@ HTML = '''
                             <div id="mailHeader" class="p-2 bg-light border-bottom" style="display:none;">
                                 <div><strong>主旨:</strong> <span id="mailSubjectView">-</span></div>
                                 <div><strong>日期:</strong> <span id="mailDateView">-</span></div>
+                                <div id="mailAttachmentsRow" style="display:none;"><strong>附件:</strong> <span id="mailAttachmentsList"></span></div>
                             </div>
                             <div id="mailContentHtml" class="mail-preview" style="flex:1;overflow:hidden;"><iframe id="mailIframe" style="width:100%;height:100%;border:none;"></iframe></div>
                             <div id="mailContentText" class="mail-preview" style="display:none;flex:1;overflow-y:auto;font-family:monospace;white-space:pre-wrap;padding:15px;"></div>
@@ -1201,12 +1205,17 @@ HTML = '''
                     item.textContent = node.name;
                     item.dataset.entryId = node.entry_id;
                     item.dataset.storeId = node.store_id;
-                    item.onclick = function() {
+                    item.onclick = async function() {
                         document.querySelectorAll('.tree-item').forEach(i => i.classList.remove('selected'));
                         this.classList.add('selected');
                         selectedEntry = node.entry_id;
                         selectedStore = node.store_id;
                         document.getElementById('selectedFolder').textContent = node.name;
+                        
+                        // 在 Review 模式下自動載入郵件列表
+                        if (reviewModeActive) {
+                            await loadMailsForReview(true);  // 重新載入
+                        }
                     };
                     li.appendChild(item);
                     
@@ -1290,10 +1299,105 @@ HTML = '''
         }
         
         // 切換 Review 模式
-        function toggleReviewMode() {
+        async function toggleReviewMode() {
             reviewModeActive = !reviewModeActive;
             document.getElementById('reviewMode').style.display = reviewModeActive ? 'block' : 'none';
             document.getElementById('statsMode').style.display = reviewModeActive ? 'none' : (resultData ? 'block' : 'none');
+            
+            // 切換到 Review 模式時自動載入郵件
+            if (reviewModeActive && selectedEntry) {
+                await loadMailsForReview(true);  // 重新載入
+            }
+        }
+        
+        // Review 模式狀態
+        let reviewMailsTotal = 0;
+        let reviewMailsLoaded = 0;
+        let reviewMailsLoading = false;
+        const REVIEW_PAGE_SIZE = 100;
+        
+        // 載入郵件列表 (Review 模式) - 支援分頁動態載入
+        async function loadMailsForReview(reset = false) {
+            if (!selectedEntry || reviewMailsLoading) return;
+            
+            if (reset) {
+                allMails = [];
+                reviewMailsLoaded = 0;
+                reviewMailsTotal = 0;
+            }
+            
+            // 如果已載入全部，不再載入
+            if (!reset && reviewMailsLoaded >= reviewMailsTotal && reviewMailsTotal > 0) return;
+            
+            reviewMailsLoading = true;
+            
+            // 顯示載入中
+            const mailList = document.getElementById('mailList');
+            if (reset) {
+                mailList.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm text-primary"></div> 載入中...</div>';
+            }
+            
+            try {
+                const r = await fetch('/api/review-mails', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        entry_id: selectedEntry, 
+                        store_id: selectedStore, 
+                        start: document.getElementById('startDate').value, 
+                        end: document.getElementById('endDate').value,
+                        offset: reviewMailsLoaded,
+                        limit: REVIEW_PAGE_SIZE
+                    }) 
+                });
+                
+                // 檢查回應類型
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new Error('伺服器返回非 JSON 格式');
+                }
+                
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                
+                reviewMailsTotal = data.total || 0;
+                reviewMailsLoaded += (data.mails || []).length;
+                
+                // 合併郵件
+                allMails = allMails.concat(data.mails || []);
+                renderMailList();
+                
+                // 更新計數顯示
+                updateReviewCount();
+                
+            } catch (e) {
+                console.error('載入郵件失敗:', e);
+                if (reset) {
+                    mailList.innerHTML = '<div class="text-center text-danger p-3">載入失敗: ' + e.message + '</div>';
+                }
+            }
+            
+            reviewMailsLoading = false;
+        }
+        
+        // 更新 Review 模式計數
+        function updateReviewCount() {
+            const countEl = document.getElementById('reviewMailCount');
+            if (countEl) {
+                countEl.textContent = `已載入 ${allMails.length} / ${reviewMailsTotal} 封`;
+            }
+        }
+        
+        // 滾動載入更多
+        function onMailListScroll(e) {
+            if (!reviewModeActive) return;
+            const el = e.target;
+            // 當滾動到底部 100px 內時載入更多
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) {
+                if (reviewMailsLoaded < reviewMailsTotal && !reviewMailsLoading) {
+                    loadMailsForReview(false);
+                }
+            }
         }
 
         // 分析
@@ -1941,19 +2045,29 @@ HTML = '''
         // Review 模式 - 郵件列表
         function renderMailList() {
             const search = document.getElementById('mailSearch').value.toLowerCase();
-            const filtered = allMails.filter(m => !search || m.subject.toLowerCase().includes(search) || m.body.toLowerCase().includes(search));
+            const filtered = allMails.filter(m => !search || (m.subject || '').toLowerCase().includes(search) || (m.body || '').toLowerCase().includes(search));
             
-            document.getElementById('mailList').innerHTML = filtered.map((m, i) => `
-                <div class="mail-item" onclick="selectMail(${i})">
-                    <div class="mail-subject">${m.subject || '(無主旨)'}</div>
+            let html = filtered.map((m, i) => `
+                <div class="mail-item" onclick="selectMail(${i})" data-mail-id="${m.mail_id || ''}">
+                    <div class="mail-subject">${m.subject || '(無主旨)'} ${m.attachment_count > 0 ? '<i class="bi bi-paperclip text-muted" title="' + m.attachment_count + ' 個附件"></i>' : ''}</div>
                     <div class="mail-meta">${m.date} ${m.time || ''} | ${m.sender || ''}</div>
                 </div>
-            `).join('') || '<div class="p-3 text-muted">無郵件</div>';
+            `).join('');
+            
+            // 如果還有更多未載入，顯示提示
+            if (reviewMailsLoaded < reviewMailsTotal && !search) {
+                html += `<div class="text-center p-2 text-muted small" id="loadMoreHint">
+                    <span class="spinner-border spinner-border-sm me-1" style="display:${reviewMailsLoading ? 'inline-block' : 'none'}"></span>
+                    向下滾動載入更多... (${reviewMailsLoaded}/${reviewMailsTotal})
+                </div>`;
+            }
+            
+            document.getElementById('mailList').innerHTML = html || '<div class="p-3 text-muted">無郵件</div>';
         }
         
         function filterMailList() { renderMailList(); }
         
-        function selectMail(index) {
+        async function selectMail(index) {
             document.querySelectorAll('.mail-item').forEach(el => el.classList.remove('selected'));
             document.querySelectorAll('.mail-item')[index]?.classList.add('selected');
             
@@ -1964,13 +2078,60 @@ HTML = '''
             document.getElementById('mailSubjectView').textContent = mail.subject || '-';
             document.getElementById('mailDateView').textContent = `${mail.date} ${mail.time || ''}`;
             
+            // 如果已有完整內容則直接顯示
+            if (mail.html_body !== undefined) {
+                displayMailContent(mail);
+                return;
+            }
+            
+            // 否則從 API 取得完整內容
+            if (mail.mail_id) {
+                try {
+                    const r = await fetch(`/api/mail/${mail.mail_id}`);
+                    if (r.ok) {
+                        const fullMail = await r.json();
+                        // 更新本地資料
+                        allMails[index] = { ...mail, ...fullMail };
+                        displayMailContent(allMails[index]);
+                    } else {
+                        displayMailContent(mail);
+                    }
+                } catch (e) {
+                    displayMailContent(mail);
+                }
+            } else {
+                displayMailContent(mail);
+            }
+        }
+        
+        function displayMailContent(mail) {
             if (mail.html_body) {
                 document.getElementById('mailIframe').srcdoc = mail.html_body;
             } else {
-                const textHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;font-size:14px;padding:15px;}</style></head><body><pre style="white-space:pre-wrap;">${escapeHtml(mail.body)}</pre></body></html>`;
+                const textHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;font-size:14px;padding:15px;}</style></head><body><pre style="white-space:pre-wrap;">${escapeHtml(mail.body || '')}</pre></body></html>`;
                 document.getElementById('mailIframe').srcdoc = textHtml;
             }
             document.getElementById('mailContentText').textContent = mail.body || '';
+            
+            // 顯示附件
+            const attachmentsRow = document.getElementById('mailAttachmentsRow');
+            const attachmentsList = document.getElementById('mailAttachmentsList');
+            if (mail.attachments && mail.attachments.length > 0) {
+                attachmentsRow.style.display = 'block';
+                attachmentsList.innerHTML = mail.attachments.map(att => 
+                    `<span class="badge bg-secondary me-1" title="${formatFileSize(att.size)}"><i class="bi bi-paperclip"></i> ${att.name}</span>`
+                ).join('');
+            } else {
+                attachmentsRow.style.display = 'none';
+            }
+        }
+        
+        function formatFileSize(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
         
         function setMailViewMode(mode) {
@@ -2074,9 +2235,19 @@ HTML = '''
                 const data = await r.json();
                 if (data.error) throw new Error(data.error);
                 resultData = data;
+                
+                // 關閉 Review 模式，顯示統計模式
+                reviewModeActive = false;
+                document.getElementById('reviewMode').style.display = 'none';
+                
                 fillFilterOptions();
                 updateUI();
                 document.getElementById('statsMode').style.display = 'block';
+                
+                // 更新郵件列表（供後續 Review 使用）
+                if (data.mails) {
+                    allMails = data.mails;
+                }
             } catch (e) { alert('錯誤: ' + e.message); }
             document.getElementById('loading').style.display = 'none';
         }
@@ -3046,6 +3217,7 @@ def api_upload():
     parser = TaskParser(exclude_middle_priority=exclude_middle_priority)
     mails = []
     
+    import hashlib
     for f in request.files.getlist('f'):
         if not f.filename.endswith('.msg'): continue
         try:
@@ -3062,15 +3234,34 @@ def api_upload():
                 mail_date_str = mail_time.strftime("%Y-%m-%d") if mail_time else ""
                 mail_time_str = mail_time.strftime("%H:%M") if mail_time else ""
                 
+                # 取得 HTML body，確保是字串
                 html_body = ""
                 try:
-                    html_body = msg.htmlBody or ""
+                    raw_html = msg.htmlBody
+                    if raw_html:
+                        if isinstance(raw_html, bytes):
+                            html_body = raw_html.decode('utf-8', errors='ignore')
+                        else:
+                            html_body = str(raw_html)
                 except:
                     pass
+                
+                # 生成 mail_id
+                mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{msg.subject or ''}".encode()).hexdigest()[:12]
+                
+                # 存入 MAIL_CONTENTS（供 API 和匯出使用）
+                MAIL_CONTENTS[mail_id] = {
+                    "subject": msg.subject or "",
+                    "body": msg.body or "",
+                    "html_body": html_body,
+                    "date": mail_date_str,
+                    "time": mail_time_str
+                }
                 
                 parser.parse(msg.subject or "", msg.body or "", mail_date_str, mail_time_str, html_body)
                 
                 mails.append({
+                    "mail_id": mail_id,
                     "subject": msg.subject or "",
                     "body": msg.body or "",
                     "html_body": html_body,
@@ -3098,6 +3289,146 @@ def api_mail(mail_id):
     if mail_id in MAIL_CONTENTS:
         return jsonify(MAIL_CONTENTS[mail_id])
     return jsonify({'error': 'Mail not found'}), 404
+
+@app.route('/api/review-mails', methods=['POST'])
+def api_review_mails():
+    """Review 模式專用 - 只載入郵件列表，不做分析，支援分頁"""
+    global MAIL_CONTENTS
+    
+    if not HAS_OUTLOOK:
+        return jsonify({'error': 'Outlook not available'}), 500
+    
+    data = request.json or {}
+    entry_id = data.get('entry_id')
+    store_id = data.get('store_id')
+    start_date = data.get('start')
+    end_date = data.get('end')
+    offset = data.get('offset', 0)  # 分頁偏移
+    limit = data.get('limit', 100)  # 每頁筆數
+    
+    if not entry_id:
+        return jsonify({'error': 'No folder selected'}), 400
+    
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        folder = outlook.GetFolderFromID(entry_id, store_id) if store_id else outlook.GetFolderFromID(entry_id)
+        
+        items = folder.Items
+        items.Sort("[ReceivedTime]", True)  # 降序排列
+        
+        # 日期篩選 - 使用正確的 Outlook 日期格式
+        if start_date and end_date:
+            try:
+                filter_str = f"[ReceivedTime] >= '{start_date}' AND [ReceivedTime] <= '{end_date} 23:59:59'"
+                items = items.Restrict(filter_str)
+            except Exception as e:
+                print(f"Restrict failed: {e}, using all items")
+        
+        # 取得總數
+        try:
+            total_count = items.Count
+        except:
+            total_count = 0
+            
+        mails = []
+        
+        if total_count == 0:
+            return jsonify({
+                'mails': [],
+                'total': 0,
+                'offset': offset,
+                'limit': limit,
+                'has_more': False
+            })
+        
+        # 分頁載入
+        start_idx = offset + 1  # Outlook 是 1-based
+        end_idx = min(offset + limit, total_count)
+        
+        import hashlib
+        for i in range(start_idx, end_idx + 1):
+            try:
+                msg = items.Item(i)
+                if not hasattr(msg, 'Subject'):
+                    continue
+                
+                mail_time = msg.ReceivedTime
+                mail_date_str = mail_time.strftime("%Y-%m-%d") if mail_time else ""
+                mail_time_str = mail_time.strftime("%H:%M") if mail_time else ""
+                
+                # 生成 mail_id
+                mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{msg.Subject or ''}".encode()).hexdigest()[:12]
+                
+                # 取得郵件內容
+                body = ""
+                html_body = ""
+                try:
+                    body = msg.Body or ""
+                except:
+                    pass
+                try:
+                    html_body = msg.HTMLBody or ""
+                except:
+                    pass
+                
+                # 存入 MAIL_CONTENTS 供後續預覽
+                MAIL_CONTENTS[mail_id] = {
+                    "subject": msg.Subject or "",
+                    "body": body,
+                    "html_body": html_body,
+                    "date": mail_date_str,
+                    "time": mail_time_str
+                }
+                
+                # 取得附件資訊
+                attachments = []
+                try:
+                    if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
+                        for j in range(1, msg.Attachments.Count + 1):
+                            att = msg.Attachments.Item(j)
+                            attachments.append({
+                                "index": j,
+                                "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{j}",
+                                "size": att.Size if hasattr(att, 'Size') else 0
+                            })
+                except:
+                    pass
+                
+                # 存入附件資訊
+                MAIL_CONTENTS[mail_id]["attachments"] = attachments
+                
+                mails.append({
+                    "mail_id": mail_id,
+                    "subject": msg.Subject or "(無主旨)",
+                    "body": body[:200] + "..." if len(body) > 200 else body,  # 預覽用截斷
+                    "date": mail_date_str,
+                    "time": mail_time_str,
+                    "sender": str(msg.SenderName) if hasattr(msg, 'SenderName') else "",
+                    "attachment_count": len(attachments)
+                })
+            except Exception as item_err:
+                print(f"Error reading item {i}: {item_err}")
+                continue
+        
+        return jsonify({
+            'mails': mails,
+            'total': total_count,
+            'offset': offset,
+            'limit': limit,
+            'has_more': end_idx < total_count
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+# 附件資訊 API（需要另外處理實際下載）
+@app.route('/api/mail/<mail_id>/attachments')
+def api_mail_attachments(mail_id):
+    if mail_id in MAIL_CONTENTS:
+        return jsonify(MAIL_CONTENTS[mail_id].get('attachments', []))
+    return jsonify([])
 
 @app.route('/api/excel')
 def api_excel():
