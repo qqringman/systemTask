@@ -791,11 +791,11 @@ HTML = '''
                                     </div>
                                     <div class="col-md-2">
                                         <label class="form-label small mb-1">開始日期</label>
-                                        <input type="date" class="form-control form-control-sm" id="startDate">
+                                        <input type="date" class="form-control form-control-sm" id="startDate" onchange="onDateChange()">
                                     </div>
                                     <div class="col-md-2">
                                         <label class="form-label small mb-1">結束日期</label>
-                                        <input type="date" class="form-control form-control-sm" id="endDate">
+                                        <input type="date" class="form-control form-control-sm" id="endDate" onchange="onDateChange()">
                                     </div>
                                     <div class="col-md-2">
                                         <label class="form-label small mb-1">&nbsp;</label>
@@ -1344,6 +1344,14 @@ HTML = '''
             }
         }
         
+        // 日期變更事件 - 如果在 Review 模式，重新載入郵件
+        async function onDateChange() {
+            if (reviewModeActive && selectedEntry && !useUploadedMails) {
+                console.log('[Date] Date changed, reloading mails...');
+                await loadMailsForReview(true);
+            }
+        }
+        
         // Review 模式狀態
         let reviewMailsTotal = 0;
         let reviewMailsLoaded = 0;
@@ -1421,27 +1429,30 @@ HTML = '''
         function updateReviewCount() {
             const countEl = document.getElementById('reviewMailCount');
             if (countEl) {
+                const hasMore = reviewMailsLoaded < reviewMailsTotal;
                 countEl.textContent = `已載入 ${allMails.length} / ${reviewMailsTotal} 封`;
             }
         }
         
         // 滾動載入節流
         let scrollThrottleTimer = null;
+        let lastScrollTime = 0;
         
         // 滾動載入更多
         function onMailListScroll(e) {
             if (!reviewModeActive || useUploadedMails) return;
+            if (reviewMailsLoading) return;  // 正在載入中，直接返回
+            if (reviewMailsLoaded >= reviewMailsTotal) return;  // 已載入全部
             
-            // 節流：每 200ms 最多觸發一次
-            if (scrollThrottleTimer) return;
-            scrollThrottleTimer = setTimeout(() => { scrollThrottleTimer = null; }, 200);
+            const now = Date.now();
+            if (now - lastScrollTime < 300) return;  // 300ms 節流
             
             const el = e.target;
             // 當滾動到底部 150px 內時載入更多
             if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
-                if (reviewMailsLoaded < reviewMailsTotal && !reviewMailsLoading) {
-                    loadMailsForReview(false);
-                }
+                lastScrollTime = now;
+                console.log('[Scroll] Loading more...', reviewMailsLoaded, '/', reviewMailsTotal);
+                loadMailsForReview(false);
             }
         }
 
@@ -2122,27 +2133,27 @@ HTML = '''
             const mail = allMails[index];
             if (!mail) return;
             
-            console.log('[selectMail] mail:', mail.mail_id, 'html_body exists:', !!mail.html_body, 'html_body len:', (mail.html_body || '').length);
+            console.log('[selectMail] mail:', mail.mail_id, 'html_body exists:', !!mail.html_body, 'attachments:', mail.attachments?.length || 0);
             
             document.getElementById('mailHeader').style.display = 'block';
             document.getElementById('mailSubjectView').textContent = mail.subject || '-';
             document.getElementById('mailDateView').textContent = `${mail.date} ${mail.time || ''}`;
             
-            // 如果已有 HTML 內容則直接顯示
-            if (mail.html_body && mail.html_body.length > 0) {
-                console.log('[selectMail] Using existing html_body');
+            // 如果已有完整內容（HTML 和附件資訊）則直接顯示
+            if (mail.html_body && mail.html_body.length > 0 && mail.attachments !== undefined) {
+                console.log('[selectMail] Using existing data');
                 displayMailContent(mail);
                 return;
             }
             
-            // 否則從 API 取得完整內容
+            // 否則從 API 取得完整內容（包含附件資訊）
             if (mail.mail_id) {
                 try {
                     console.log('[selectMail] Fetching from API:', mail.mail_id);
                     const r = await fetch(`/api/mail/${mail.mail_id}`);
                     if (r.ok) {
                         const fullMail = await r.json();
-                        console.log('[selectMail] API response html_body len:', (fullMail.html_body || '').length);
+                        console.log('[selectMail] API response html_body len:', (fullMail.html_body || '').length, 'attachments:', fullMail.attachments?.length || 0);
                         // 更新本地資料
                         allMails[index] = { ...mail, ...fullMail };
                         displayMailContent(allMails[index]);
@@ -3474,8 +3485,71 @@ def api_upload():
 
 @app.route('/api/mail/<mail_id>')
 def api_mail(mail_id):
+    # 如果已經有完整內容，直接返回
+    if mail_id in MAIL_CONTENTS and MAIL_CONTENTS[mail_id].get('html_body'):
+        return jsonify(MAIL_CONTENTS[mail_id])
+    
+    # 如果有 entry_id，從 Outlook 讀取完整內容
+    if mail_id in MAIL_ENTRIES and HAS_OUTLOOK:
+        try:
+            entry_info = MAIL_ENTRIES[mail_id]
+            outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+            msg = outlook.GetItemFromID(entry_info['entry_id'], entry_info.get('store_id'))
+            
+            body = ""
+            html_body = ""
+            try:
+                body = msg.Body or ""
+            except:
+                pass
+            try:
+                html_body = msg.HTMLBody or ""
+            except:
+                pass
+            
+            # 取得附件資訊
+            attachments = []
+            try:
+                if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
+                    for j in range(1, msg.Attachments.Count + 1):
+                        att = msg.Attachments.Item(j)
+                        attachments.append({
+                            "index": j,
+                            "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{j}",
+                            "size": att.Size if hasattr(att, 'Size') else 0
+                        })
+            except:
+                pass
+            
+            mail_time = None
+            try:
+                mail_time = msg.ReceivedTime
+            except:
+                try:
+                    mail_time = msg.SentOn
+                except:
+                    pass
+            
+            mail_data = {
+                "subject": msg.Subject or "",
+                "body": body,
+                "html_body": html_body,
+                "date": mail_time.strftime("%Y-%m-%d") if mail_time else "",
+                "time": mail_time.strftime("%H:%M") if mail_time else "",
+                "attachments": attachments
+            }
+            
+            # 快取供下次使用
+            MAIL_CONTENTS[mail_id] = mail_data
+            
+            return jsonify(mail_data)
+        except Exception as e:
+            print(f"[api_mail] Error reading from Outlook: {e}")
+    
+    # 返回已有的部分資料或錯誤
     if mail_id in MAIL_CONTENTS:
         return jsonify(MAIL_CONTENTS[mail_id])
+    
     return jsonify({'error': 'Mail not found'}), 404
 
 @app.route('/api/review-mails', methods=['POST'])
@@ -3494,6 +3568,8 @@ def api_review_mails():
     offset = data.get('offset', 0)  # 分頁偏移
     limit = data.get('limit', 100)  # 每頁筆數
     
+    print(f"[Review] Request: start={start_date}, end={end_date}, offset={offset}, limit={limit}")
+    
     if not entry_id:
         return jsonify({'error': 'No folder selected'}), 400
     
@@ -3504,13 +3580,23 @@ def api_review_mails():
         items = folder.Items
         items.Sort("[ReceivedTime]", True)  # 降序排列
         
+        print(f"[Review] Folder has {items.Count} items before filter")
+        
         # 日期篩選 - 使用正確的 Outlook 日期格式
         if start_date and end_date:
             try:
-                filter_str = f"[ReceivedTime] >= '{start_date}' AND [ReceivedTime] <= '{end_date} 23:59:59'"
+                # Outlook Restrict 需要 MM/DD/YYYY 格式
+                from datetime import datetime
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+                start_fmt = start_dt.strftime("%m/%d/%Y")
+                end_fmt = end_dt.strftime("%m/%d/%Y")
+                filter_str = f"[ReceivedTime] >= '{start_fmt}' AND [ReceivedTime] <= '{end_fmt} 11:59 PM'"
+                print(f"[Review] Date filter: {filter_str}")
                 items = items.Restrict(filter_str)
+                print(f"[Review] After filter: {items.Count} items")
             except Exception as e:
-                print(f"Restrict failed: {e}, using all items")
+                print(f"[Review] Restrict failed: {e}, using all items")
         
         # 取得總數
         try:
@@ -3562,28 +3648,10 @@ def api_review_mails():
                 # 生成 mail_id
                 mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{msg.Subject or ''}".encode()).hexdigest()[:12]
                 
-                # 取得郵件內容
-                body = ""
-                html_body = ""
-                try:
-                    body = msg.Body or ""
-                except:
-                    pass
-                try:
-                    html_body = msg.HTMLBody or ""
-                except:
-                    pass
+                # 延遲讀取 body 和 html_body - 只在需要時才讀取
+                # 這裡只記錄基本資訊，實際內容在 /api/mail/<id> 時讀取
                 
-                # 存入 MAIL_CONTENTS 供後續預覽
-                MAIL_CONTENTS[mail_id] = {
-                    "subject": msg.Subject or "",
-                    "body": body,
-                    "html_body": html_body,
-                    "date": mail_date_str,
-                    "time": mail_time_str
-                }
-                
-                # 儲存 entry_id 用於下載附件
+                # 儲存 entry_id 用於後續讀取完整內容和下載附件
                 try:
                     MAIL_ENTRIES[mail_id] = {
                         "entry_id": msg.EntryID,
@@ -3592,31 +3660,21 @@ def api_review_mails():
                 except:
                     pass
                 
-                # 取得附件資訊
-                attachments = []
+                # 快速檢查是否有附件（不讀取附件詳細資訊）
+                attachment_count = 0
                 try:
-                    if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
-                        for j in range(1, msg.Attachments.Count + 1):
-                            att = msg.Attachments.Item(j)
-                            attachments.append({
-                                "index": j,
-                                "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{j}",
-                                "size": att.Size if hasattr(att, 'Size') else 0
-                            })
+                    if hasattr(msg, 'Attachments'):
+                        attachment_count = msg.Attachments.Count
                 except:
                     pass
-                
-                # 存入附件資訊
-                MAIL_CONTENTS[mail_id]["attachments"] = attachments
                 
                 mails.append({
                     "mail_id": mail_id,
                     "subject": msg.Subject or "(無主旨)",
-                    "body": body[:200] + "..." if len(body) > 200 else body,  # 預覽用截斷
                     "date": mail_date_str,
                     "time": mail_time_str,
                     "sender": str(msg.SenderName) if hasattr(msg, 'SenderName') else "",
-                    "attachment_count": len(attachments)
+                    "attachment_count": attachment_count
                 })
             except Exception as item_err:
                 error_count += 1
