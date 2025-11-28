@@ -2090,10 +2090,11 @@ HTML = '''
 </html>
 '''
 
-def generate_export_html(data, report_date):
+def generate_export_html(data, report_date, mail_contents=None):
     """生成匯出用的 HTML - 與主頁面完全一致的功能和操作"""
     import json
     data_json = json.dumps(data, ensure_ascii=False)
+    mail_contents_json = json.dumps(mail_contents or {}, ensure_ascii=False)
     
     # 從主 HTML 模板提取 CSS 樣式
     css_style = '''
@@ -2400,10 +2401,38 @@ def generate_export_html(data, report_date):
         </div>
     </div>
 
+    <!-- Mail Modal -->
+    <div class="modal fade" id="mailModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header py-2" style="background:#2E75B6;color:white">
+                    <div>
+                        <h6 class="modal-title mb-0" id="mailSubject"></h6>
+                        <small id="mailDate"></small> <small id="mailTime"></small>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-light active" id="btnHtml" onclick="setMailView('html')">HTML</button>
+                            <button class="btn btn-outline-light" id="btnText" onclick="setMailView('text')">純文字</button>
+                        </div>
+                        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                    </div>
+                </div>
+                <div class="modal-body p-0">
+                    <div id="mailBodyHtml" style="height:60vh;overflow:hidden;">
+                        <iframe id="mailPreviewIframe" style="width:100%;height:100%;border:none;"></iframe>
+                    </div>
+                    <div id="mailBodyText" style="max-height:60vh;overflow-y:auto;padding:15px;font-family:monospace;font-size:13px;white-space:pre-wrap;background:#fafafa;display:none;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         // 預載數據
         const resultData = {data_json};
+        const mailContents = {mail_contents_json};
         
         const statusLabels = {{ completed: '已完成', pending: 'Pending', in_progress: '進行中' }};
         let chart1 = null, chart2 = null, chart3 = null, chart4 = null, currentModal = null;
@@ -2416,7 +2445,7 @@ def generate_export_html(data, report_date):
             contrib: {{ data: [], filtered: [], page: 0, pageSize: 50, sortKey: 'rank', sortDir: 1 }}
         }};
         
-        function esc(s) {{ return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }}
+        function esc(s) {{ return String(s || '').replace(/'/g, "\\\\'").replace(/"/g, '&quot;'); }}
         
         // 更新 UI
         function updateUI() {{
@@ -2499,18 +2528,23 @@ def generate_export_html(data, report_date):
             const end = start + state.pageSize;
             const pageData = state.filtered.slice(start, end);
             
-            document.getElementById('taskTableBody').innerHTML = pageData.map(t => `
+            document.getElementById('taskTableBody').innerHTML = pageData.map(t => {{
+                const escapedTitle = esc(t.title);
+                return `
                 <tr class="row-${{t.task_status}} ${{t.overdue_days > 0 ? 'row-overdue' : ''}}">
                     <td>${{t.last_seen || t.mail_date || '-'}}</td>
                     <td><span class="badge bg-secondary" style="font-size:0.6rem">${{t.module || '-'}}</span></td>
-                    <td>${{t.title}}</td>
+                    <td>
+                        <span style="cursor:pointer" onclick="showTaskDetail('${{escapedTitle}}')">${{t.title}}</span>
+                        ${{t.mail_id ? `<i class="bi bi-envelope ms-1 text-primary" style="cursor:pointer;font-size:0.8rem" onclick="showMailPreview('${{t.mail_id}}', event)" title="預覽 Mail"></i>` : ''}}
+                    </td>
                     <td>${{t.owners_str || (t.owners ? t.owners.join('/') : '-')}}</td>
                     <td><span class="badge badge-${{t.priority}}">${{t.priority}}</span></td>
                     <td class="${{t.overdue_days > 0 ? 'text-overdue' : ''}}">${{t.due || '-'}}</td>
                     <td class="${{t.overdue_days > 0 ? 'text-overdue' : ''}}">${{t.overdue_days > 0 ? '+' + t.overdue_days + '天' : '-'}}</td>
                     <td><span class="badge badge-${{t.task_status}}">${{statusLabels[t.task_status] || t.task_status}}</span></td>
                 </tr>
-            `).join('');
+            `}}).join('');
             
             document.getElementById('taskPageInfo').textContent = `${{start + 1}}-${{Math.min(end, state.filtered.length)}} / ${{state.filtered.length}}`;
         }}
@@ -2721,7 +2755,7 @@ def generate_export_html(data, report_date):
                 <tr class="row-${{t.task_status}} ${{t.overdue_days > 0 ? 'row-overdue' : ''}}">
                     <td>${{t.last_seen || t.mail_date || '-'}}</td>
                     <td><span class="badge bg-secondary" style="font-size:0.6rem">${{t.module || '-'}}</span></td>
-                    <td>${{t.title}}</td>
+                    <td>${{t.title}} ${{t.mail_id ? `<i class="bi bi-envelope ms-1 text-primary" style="cursor:pointer;font-size:0.8rem" onclick="showMailPreview('${{t.mail_id}}', event)" title="預覽"></i>` : ''}}</td>
                     <td>${{t.owners_str || (t.owners ? t.owners.join('/') : '-')}}</td>
                     <td><span class="badge badge-${{t.priority}}">${{t.priority}}</span></td>
                     <td class="${{t.overdue_days > 0 ? 'text-overdue' : ''}}">${{t.due || '-'}}</td>
@@ -2755,7 +2789,7 @@ def generate_export_html(data, report_date):
                     <tr class="row-${{t.task_status}} ${{t.overdue_days > 0 ? 'row-overdue' : ''}}">
                         <td>${{t.last_seen || t.mail_date || '-'}}</td>
                         <td><span class="badge bg-secondary" style="font-size:0.6rem">${{t.module || '-'}}</span></td>
-                        <td>${{t.title}}</td>
+                        <td>${{t.title}} ${{t.mail_id ? `<i class="bi bi-envelope ms-1 text-primary" style="cursor:pointer;font-size:0.8rem" onclick="showMailPreview('${{t.mail_id}}', event)" title="預覽"></i>` : ''}}</td>
                         <td>${{t.owners_str || (t.owners ? t.owners.join('/') : '-')}}</td>
                         <td><span class="badge badge-${{t.priority}}">${{t.priority}}</span></td>
                         <td class="${{t.overdue_days > 0 ? 'text-overdue' : ''}}">${{t.due || '-'}}</td>
@@ -2764,6 +2798,46 @@ def generate_export_html(data, report_date):
                     </tr>
                 `).join('');
             }}
+        }}
+        
+        function showTaskDetail(title) {{
+            const tasks = resultData.all_tasks.filter(t => t.title === title);
+            showModal(`任務: ${{title}}`, modalTableWithFilters(tasks, 'taskDetailTable'));
+            setTimeout(filterModalTasks, 100);
+        }}
+        
+        function showMailPreview(mailId, event) {{
+            if (event) event.stopPropagation();
+            if (!mailId) {{ alert('此任務沒有關聯的 Mail'); return; }}
+            
+            const mail = mailContents[mailId];
+            if (!mail) {{ alert('無法取得 Mail 內容'); return; }}
+            
+            document.getElementById('mailSubject').textContent = mail.subject || '-';
+            document.getElementById('mailDate').textContent = mail.date || '-';
+            document.getElementById('mailTime').textContent = mail.time ? `(${{mail.time}})` : '';
+            
+            const hasHtml = mail.html_body && mail.html_body.trim().length > 0;
+            if (hasHtml) {{
+                setMailView('html');
+                document.getElementById('mailPreviewIframe').srcdoc = mail.html_body;
+            }} else {{
+                setMailView('html');
+                const textAsHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Segoe UI,Arial,sans-serif;font-size:14px;padding:20px;line-height:1.6;}}</style></head><body><pre style="white-space:pre-wrap;font-family:inherit;">${{escapeHtml(mail.body || '(無內容)')}}</pre></body></html>`;
+                document.getElementById('mailPreviewIframe').srcdoc = textAsHtml;
+            }}
+            document.getElementById('mailBodyText').textContent = mail.body || '(無內容)';
+            
+            new bootstrap.Modal(document.getElementById('mailModal')).show();
+        }}
+        
+        function escapeHtml(text) {{ const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }}
+        
+        function setMailView(mode) {{
+            document.getElementById('mailBodyHtml').style.display = mode === 'html' ? 'block' : 'none';
+            document.getElementById('mailBodyText').style.display = mode === 'text' ? 'block' : 'none';
+            document.getElementById('btnHtml').classList.toggle('active', mode === 'html');
+            document.getElementById('btnText').classList.toggle('active', mode === 'text');
         }}
         
         function showMemberTasks(name) {{
@@ -3033,18 +3107,17 @@ def api_excel():
 
 @app.route('/api/export-html')
 def api_export_html():
-    global LAST_DATA
+    global LAST_DATA, MAIL_CONTENTS
     
     if not LAST_DATA:
         return "請先執行分析", 400
     
     # 使用主頁面模板，但注入預載數據
     import json
-    data_json = json.dumps(LAST_DATA, ensure_ascii=False)
     report_date = datetime.now().strftime("%Y-%m-%d %H:%M")
     
-    # 生成與主頁面完全一致的 HTML（移除資料來源設定區，預載數據）
-    html = generate_export_html(LAST_DATA, report_date)
+    # 生成與主頁面完全一致的 HTML（移除資料來源設定區，預載數據，包含郵件內容）
+    html = generate_export_html(LAST_DATA, report_date, MAIL_CONTENTS)
     
     return Response(html, mimetype='text/html', headers={'Content-Disposition': f'attachment; filename=task_report_{datetime.now().strftime("%Y%m%d_%H%M")}.html'})
 
