@@ -178,7 +178,7 @@ def load_folders():
     OUTLOOK_OK = True
     print(f"    ✅ 共載入 {len(folders)} 個資料夾")
 
-def get_messages(entry_id, store_id, start_date, end_date):
+def get_messages(entry_id, store_id, start_date, end_date, exclude_after_5pm: bool = True):
     pythoncom.CoInitialize()
     outlook = win32com.client.Dispatch("Outlook.Application")
     namespace = outlook.GetNamespace("MAPI")
@@ -201,10 +201,17 @@ def get_messages(entry_id, store_id, start_date, end_date):
             rt = item.ReceivedTime
             if hasattr(rt, 'date') and not (start_dt.date() <= rt.date() < end_dt.date()):
                 continue
+            
+            # 檢查是否是下午 5:00 後的 mail
+            if exclude_after_5pm and hasattr(rt, 'hour'):
+                if rt.hour >= 17:  # 17:00 = 下午 5:00
+                    continue
+            
             messages.append({
                 "subject": item.Subject or "", 
                 "body": item.Body or "", 
-                "date": rt.strftime("%Y-%m-%d") if hasattr(rt, 'strftime') else ""
+                "date": rt.strftime("%Y-%m-%d") if hasattr(rt, 'strftime') else "",
+                "time": rt.strftime("%H:%M") if hasattr(rt, 'strftime') else ""
             })
         except:
             continue
@@ -212,9 +219,30 @@ def get_messages(entry_id, store_id, start_date, end_date):
     return messages
 
 class TaskParser:
-    def __init__(self):
+    def __init__(self, exclude_middle_priority: bool = True):
         self.tasks: List[Task] = []
         self.current_module: str = ""  # 當前的大模組
+        self.exclude_middle_priority = exclude_middle_priority
+        self.stop_parsing = False  # 遇到 Middle priority 後停止解析
+    
+    def _is_valid_module(self, text: str) -> bool:
+        """檢查是否是有效的大模組標題"""
+        # 排除 [status: xxx], [Due: xxx], [Pending], [Resolved] 等
+        invalid_patterns = [
+            r'^\[status\s*:', r'^\[due\s*:', r'^\[duedate\s*:',
+            r'^\[pending\]$', r'^\[resolved\]$', r'^\[done\]$',
+            r'^\[completed\]$', r'^\[in\s*progress\]$'
+        ]
+        text_lower = text.lower()
+        for pattern in invalid_patterns:
+            if re.match(pattern, text_lower):
+                return False
+        return True
+    
+    def _is_middle_priority_marker(self, line: str) -> bool:
+        """檢查是否是 Middle priority 標記"""
+        line_lower = line.lower().strip()
+        return 'middle priority' in line_lower or 'low priority' in line_lower
     
     def parse(self, subject: str, body: str, mail_date: str = ""):
         if '<html' in body.lower() or '<' in body:
@@ -224,14 +252,25 @@ class TaskParser:
             body = re.sub(r'&[a-z]+;', ' ', body)
         
         self.current_module = ""  # 重置
+        self.stop_parsing = False  # 重置
         
         for line in body.split('\n'):
             line = line.strip()
             
+            # 檢查是否遇到 Middle priority 標記
+            if self.exclude_middle_priority and self._is_middle_priority_marker(line):
+                self.stop_parsing = True
+                break  # 停止解析這封 mail 的後續內容
+            
             # 檢查是否是大模組標題（如 [公版]、[DIAS][AN11 Mac8q 2816A 2GB AOSP] 等）
+            # 必須是獨立一行，且不包含數字開頭的任務格式
             module_match = re.match(r'^(\[[^\]]+\](?:\[[^\]]+\])*)\s*$', line)
             if module_match:
-                self.current_module = module_match.group(1)
+                potential_module = module_match.group(1)
+                # 檢查第一個 [...] 是否是有效的模組標題
+                first_bracket = re.match(r'^(\[[^\]]+\])', potential_module)
+                if first_bracket and self._is_valid_module(first_bracket.group(1)):
+                    self.current_module = potential_module
                 continue
             
             # 解析任務
@@ -314,31 +353,17 @@ class TaskParser:
 
 class Stats:
     def __init__(self):
-        self.all_tasks: List[Dict] = []  # 不去重，每個任務獨立
+        self.raw_tasks: List[Dict] = []  # 原始任務記錄
         self.unique_members: Set[str] = set()
         self.last_mail_date: str = ""
-        self.last_mail_task_keys: Set[str] = set()  # 最後一封 mail 的任務 key
     
     def _task_key(self, title: str, due: str, owners: List[str]) -> str:
         """任務唯一識別：標題 + Due date + 負責人"""
         return f"{title.strip().lower()}|{due}|{','.join(sorted(owners))}"
     
     def add(self, task: Task):
-        key = self._task_key(task.title, task.due_date, task.owners)
-        
-        # 追蹤最後一封 mail
-        if task.mail_date > self.last_mail_date:
-            self.last_mail_date = task.mail_date
-            self.last_mail_task_keys = {key}
-        elif task.mail_date == self.last_mail_date:
-            self.last_mail_task_keys.add(key)
-        
-        # 計算超期天數
-        overdue_days = self._calc_overdue_days(task.due_date, task.mail_date)
-        is_overdue = overdue_days > 0
-        
-        # 每個任務獨立存儲（不去重）
-        task_data = {
+        """先收集所有原始任務"""
+        self.raw_tasks.append({
             "title": task.title,
             "owners": task.owners,
             "owners_str": "/".join(task.owners),
@@ -346,36 +371,185 @@ class Stats:
             "due": task.due_date,
             "status": task.status or "-",
             "mail_date": task.mail_date,
-            "last_seen": task.mail_date,
-            "module": task.module or "",  # 大模組
-            "is_overdue": is_overdue,
-            "overdue_days": overdue_days,  # 超期天數
-            "_key": key
-        }
-        self.all_tasks.append(task_data)
+            "module": task.module or "",
+            "_key": self._task_key(task.title, task.due_date, task.owners)
+        })
         
         for owner in task.owners:
             self.unique_members.add(owner)
+        
+        if task.mail_date > self.last_mail_date:
+            self.last_mail_date = task.mail_date
     
-    def _calc_overdue_days(self, due_date: str, mail_date: str) -> int:
-        """計算超期天數：mail 日期 - due date（正數表示超期）"""
-        if not due_date or not mail_date:
+    def _process_tasks(self) -> List[Dict]:
+        """
+        處理任務生命週期：
+        1. 按日期排序所有 mail
+        2. 同一天的 mail 合併（去重）
+        3. 追蹤每個任務的出現與消失
+        4. 計算超期天數：從第一次出現到被移除的那天 vs Due date
+        """
+        if not self.raw_tasks:
+            return []
+        
+        # 按 mail_date 分組
+        from collections import defaultdict
+        tasks_by_date = defaultdict(list)
+        for t in self.raw_tasks:
+            tasks_by_date[t["mail_date"]].append(t)
+        
+        # 排序日期
+        sorted_dates = sorted(tasks_by_date.keys())
+        
+        # 追蹤任務生命週期
+        # key -> {"first_seen", "task_data", "active"}
+        task_tracker = {}
+        
+        # 最終任務列表（每個任務實例）
+        final_tasks = []
+        
+        # 上一個日期的任務 keys
+        prev_date_keys = set()
+        
+        for date_idx, mail_date in enumerate(sorted_dates):
+            # 同一天的任務去重（只保留一個）
+            day_tasks = tasks_by_date[mail_date]
+            day_task_map = {}
+            for t in day_tasks:
+                key = t["_key"]
+                if key not in day_task_map:
+                    day_task_map[key] = t
+                else:
+                    # 同一天重複的任務，保留 priority 較高的
+                    existing = day_task_map[key]
+                    priority_order = {"high": 3, "medium": 2, "normal": 1}
+                    if priority_order.get(t["priority"], 0) > priority_order.get(existing["priority"], 0):
+                        day_task_map[key] = t
+            
+            current_date_keys = set(day_task_map.keys())
+            
+            # 檢查哪些任務在這一天消失了（完成了）
+            for key in prev_date_keys:
+                if key not in current_date_keys and key in task_tracker and task_tracker[key]["active"]:
+                    # 任務完成！計算超期
+                    tracker = task_tracker[key]
+                    task_data = tracker["task_data"].copy()
+                    
+                    # 計算超期天數：完成日期（上一個日期）vs Due date
+                    # 實際完成日是上一個還有這個任務的日期
+                    prev_date = sorted_dates[date_idx - 1] if date_idx > 0 else mail_date
+                    task_data["first_seen"] = tracker["first_seen"]
+                    task_data["last_seen"] = prev_date
+                    task_data["completed_date"] = prev_date
+                    task_data["task_status"] = "completed"
+                    task_data["overdue_days"] = self._calc_overdue_days_v2(
+                        task_data["due"], tracker["first_seen"], prev_date
+                    )
+                    task_data["days_spent"] = self._calc_days_between(tracker["first_seen"], prev_date)
+                    
+                    final_tasks.append(task_data)
+                    task_tracker[key]["active"] = False
+            
+            # 處理這一天的任務
+            for key, task_data in day_task_map.items():
+                if key not in task_tracker or not task_tracker[key]["active"]:
+                    # 新任務或重新出現的任務
+                    task_tracker[key] = {
+                        "first_seen": mail_date,
+                        "task_data": task_data,
+                        "active": True
+                    }
+                else:
+                    # 任務繼續存在，更新最新資料
+                    task_tracker[key]["task_data"] = task_data
+            
+            prev_date_keys = current_date_keys
+        
+        # 處理最後一天仍然存在的任務（進行中或 Pending）
+        last_date = sorted_dates[-1] if sorted_dates else ""
+        last_date_keys = prev_date_keys
+        
+        for key in last_date_keys:
+            if key in task_tracker and task_tracker[key]["active"]:
+                tracker = task_tracker[key]
+                task_data = tracker["task_data"].copy()
+                task_data["first_seen"] = tracker["first_seen"]
+                task_data["last_seen"] = last_date
+                
+                # 判斷是 Pending 還是進行中
+                if task_data["status"] and 'pending' in task_data["status"].lower():
+                    task_data["task_status"] = "pending"
+                else:
+                    task_data["task_status"] = "in_progress"
+                
+                # 進行中/Pending 的超期計算：用今天 vs Due date
+                task_data["overdue_days"] = self._calc_overdue_from_today(task_data["due"])
+                task_data["days_spent"] = self._calc_days_between(tracker["first_seen"], last_date)
+                
+                final_tasks.append(task_data)
+                task_tracker[key]["active"] = False
+        
+        return final_tasks
+    
+    def _calc_overdue_days_v2(self, due_date: str, first_seen: str, completed_date: str) -> int:
+        """
+        計算已完成任務的超期天數：
+        超期天數 = 完成日期 - Due date（正數表示超期）
+        """
+        if not due_date or not completed_date:
             return 0
         try:
             parts = due_date.split('/')
             if len(parts) == 2:
                 month, day = int(parts[0]), int(parts[1])
-                mail_dt = datetime.strptime(mail_date, "%Y-%m-%d")
-                year = mail_dt.year
+                completed_dt = datetime.strptime(completed_date, "%Y-%m-%d")
+                first_dt = datetime.strptime(first_seen, "%Y-%m-%d")
+                year = first_dt.year
                 due_dt = datetime(year, month, day)
-                # 如果 due date 比 mail date 晚超過 6 個月，可能是去年的
-                if (due_dt - mail_dt).days > 180:
-                    due_dt = datetime(year - 1, month, day)
-                diff = (mail_dt - due_dt).days
-                return max(0, diff)  # 只返回正數（超期天數）
+                
+                # 如果 due date 比 first_seen 早超過 6 個月，可能是明年的
+                if (first_dt - due_dt).days > 180:
+                    due_dt = datetime(year + 1, month, day)
+                
+                diff = (completed_dt - due_dt).days
+                return max(0, diff)
         except:
             pass
         return 0
+    
+    def _calc_overdue_from_today(self, due_date: str) -> int:
+        """計算進行中任務的超期天數（相對於今天）"""
+        if not due_date:
+            return 0
+        try:
+            parts = due_date.split('/')
+            if len(parts) == 2:
+                month, day = int(parts[0]), int(parts[1])
+                today = datetime.now()
+                year = today.year
+                due_dt = datetime(year, month, day)
+                
+                if (today - due_dt).days > 180:
+                    due_dt = datetime(year + 1, month, day)
+                elif (due_dt - today).days > 180:
+                    due_dt = datetime(year - 1, month, day)
+                
+                diff = (today - due_dt).days
+                return max(0, diff)
+        except:
+            pass
+        return 0
+    
+    def _calc_days_between(self, start_date: str, end_date: str) -> int:
+        """計算兩個日期之間的天數"""
+        if not start_date or not end_date:
+            return 0
+        try:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+            return (end - start).days + 1
+        except:
+            return 0
     
     def _is_overdue(self, due_date: str) -> bool:
         if not due_date:
@@ -394,34 +568,9 @@ class Stats:
             pass
         return False
     
-    def _finalize(self):
-        """完成分析後，標記任務狀態"""
-        for task in self.all_tasks:
-            key = task["_key"]
-            in_last_mail = key in self.last_mail_task_keys
-            
-            # 判斷狀態
-            if not in_last_mail:
-                task["task_status"] = "completed"
-            elif task["status"] and 'pending' in task["status"].lower():
-                task["task_status"] = "pending"
-            else:
-                task["task_status"] = "in_progress"
-            
-            # 計算天數
-            task["days_spent"] = self._calc_days(task["mail_date"])
-    
-    def _calc_days(self, mail_date: str) -> int:
-        if not mail_date:
-            return 0
-        try:
-            dt = datetime.strptime(mail_date, "%Y-%m-%d")
-            return (datetime.now() - dt).days
-        except:
-            return 0
-    
     def summary(self):
-        self._finalize()
+        # 處理任務生命週期
+        all_tasks = self._process_tasks()
         
         completed_count = 0
         pending_count = 0
@@ -435,15 +584,22 @@ class Stats:
             "score": 0, "tasks": []
         })
         
-        # 按 mail_date 降序排序
-        sorted_tasks = sorted(self.all_tasks, key=lambda x: x.get("mail_date", ""), reverse=True)
+        # 按 last_seen 降序排序
+        sorted_tasks = sorted(all_tasks, key=lambda x: x.get("last_seen", ""), reverse=True)
         
         for task in sorted_tasks:
             task_status = task["task_status"]
-            is_overdue = task["is_overdue"]
+            overdue_days = task.get("overdue_days", 0)
+            is_overdue = overdue_days > 0
+            task["is_overdue"] = is_overdue
             
             if task_status == "completed":
                 completed_count += 1
+                # 已完成任務也計入超期統計
+                if is_overdue:
+                    overdue_count += 1
+                else:
+                    not_overdue_count += 1
             elif task_status == "pending":
                 pending_count += 1
                 if is_overdue:
@@ -468,7 +624,7 @@ class Stats:
                 
                 d["tasks"].append(task)
         
-        total_tasks = len(self.all_tasks)
+        total_tasks = len(all_tasks)
         
         members = []
         for n, s in sorted(member_stats.items(), key=lambda x: -x[1]["total"]):
@@ -537,12 +693,12 @@ class Stats:
             c["rank"] = i + 1
         
         priority_counts = {"high": 0, "medium": 0, "normal": 0}
-        for task in self.all_tasks:
+        for task in all_tasks:
             priority_counts[task["priority"]] += 1
         
         # 計算模組統計
         module_stats = defaultdict(int)
-        for task in self.all_tasks:
+        for task in all_tasks:
             module = task.get("module", "") or "未分類"
             module_stats[module] += 1
         
@@ -565,7 +721,6 @@ class Stats:
         }
     
     def excel(self):
-        self._finalize()
         wb = Workbook()
         hfill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
         hfont = Font(bold=True, color="FFFFFF")
@@ -584,25 +739,43 @@ class Stats:
                 ws.cell(r, i, v).border = border
         
         ws2 = wb.create_sheet("任務明細")
-        headers2 = ["任務", "負責人", "優先級", "Due Date", "狀態", "任務狀態", "首次出現", "最後出現", "花費天數"]
+        headers2 = ["模組", "任務", "負責人", "優先級", "Due Date", "超期天數", "狀態", "任務狀態", "首次出現", "最後出現", "花費天數"]
         for i, h in enumerate(headers2, 1):
             c = ws2.cell(1, i, h); c.fill, c.font, c.border = hfill, hfont, border
         status_map = {"completed": "已完成", "pending": "Pending", "in_progress": "進行中"}
         for r, t in enumerate(summary["all_tasks"], 2):
-            values = [t["title"], t["owners_str"], t["priority"], t["due"] or "", t["status"], status_map.get(t["task_status"], ""), t["first_seen"], t["last_seen"], t["days_spent"]]
+            overdue_days = t.get("overdue_days", 0)
+            values = [
+                t.get("module", "") or "", 
+                t["title"], 
+                t["owners_str"], 
+                t["priority"], 
+                t["due"] or "", 
+                overdue_days if overdue_days > 0 else "",
+                t["status"], 
+                status_map.get(t["task_status"], ""), 
+                t.get("first_seen", "") or "", 
+                t.get("last_seen", "") or "", 
+                t.get("days_spent", 0)
+            ]
             for i, v in enumerate(values, 1):
                 cell = ws2.cell(r, i, v)
                 cell.border = border
-                if i == 4 and t.get("is_overdue"):
+                if i == 5 and overdue_days > 0:  # Due Date 欄位
+                    cell.font = redfont
+                if i == 6 and overdue_days > 0:  # 超期天數欄位
                     cell.font = redfont
         
         ws3 = wb.create_sheet("貢獻度排名")
-        headers3 = ["排名", "成員", "完成任務數", "High(×3)", "Medium(×2)", "Normal(×1)", "總分"]
+        headers3 = ["排名", "成員", "任務數", "基礎分", "超期任務數", "總超期天數", "扣分", "總分"]
         for i, h in enumerate(headers3, 1):
             c = ws3.cell(1, i, h); c.fill, c.font, c.border = hfill, hfont, border
         for r, c in enumerate(summary["contribution"], 2):
-            for i, v in enumerate([r-1, c["name"], c["completed_tasks"], c["high_score"], c["medium_score"], c["normal_score"], c["score"]], 1):
-                ws3.cell(r, i, v).border = border
+            for i, v in enumerate([c["rank"], c["name"], c["task_count"], c["base_score"], c["overdue_count"], c["overdue_days"], c["overdue_penalty"], c["score"]], 1):
+                cell = ws3.cell(r, i, v)
+                cell.border = border
+                if i in [5, 6, 7] and v > 0:  # 超期相關欄位標紅
+                    cell.font = redfont
         
         buf = io.BytesIO()
         wb.save(buf)
@@ -716,9 +889,20 @@ HTML = '''
                     </div>
                     <div class="col-md-8">
                         <div class="row g-2 mb-2">
-                            <div class="col-4"><input type="date" class="form-control form-control-sm" id="startDate"></div>
-                            <div class="col-4"><input type="date" class="form-control form-control-sm" id="endDate"></div>
-                            <div class="col-4"><button class="btn btn-primary btn-sm w-100" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button></div>
+                            <div class="col-3"><input type="date" class="form-control form-control-sm" id="startDate"></div>
+                            <div class="col-3"><input type="date" class="form-control form-control-sm" id="endDate"></div>
+                            <div class="col-3"><button class="btn btn-primary btn-sm w-100" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button></div>
+                            <div class="col-3"><button class="btn btn-outline-secondary btn-sm w-100" onclick="toggleFilterSettings()"><i class="bi bi-gear me-1"></i>篩選設定</button></div>
+                        </div>
+                        <div id="filterSettings" style="display:none;" class="mb-2 p-2 bg-light rounded">
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="excludeMiddlePriority" checked>
+                                <label class="form-check-label small" for="excludeMiddlePriority">排除 Middle priority 以下的任務</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="excludeAfter5pm" checked>
+                                <label class="form-check-label small" for="excludeAfter5pm">排除下午 5:00 後的 Mail</label>
+                            </div>
                         </div>
                         <div class="drop-zone py-2" id="dropZone">
                             <i class="bi bi-cloud-upload text-muted"></i>
@@ -1026,11 +1210,29 @@ HTML = '''
         document.getElementById('startDate').value = monthAgo.toISOString().split('T')[0];
 
         // Analyze
+        function toggleFilterSettings() {
+            const el = document.getElementById('filterSettings');
+            el.style.display = el.style.display === 'none' ? 'block' : 'none';
+        }
+        
         async function analyze() {
             if (!selectedEntry) { alert('請選擇資料夾'); return; }
             document.getElementById('loading').style.display = 'flex';
             try {
-                const r = await fetch('/api/outlook', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({entry_id: selectedEntry, store_id: selectedStore, start: document.getElementById('startDate').value, end: document.getElementById('endDate').value}) });
+                const excludeMiddlePriority = document.getElementById('excludeMiddlePriority').checked;
+                const excludeAfter5pm = document.getElementById('excludeAfter5pm').checked;
+                const r = await fetch('/api/outlook', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({
+                        entry_id: selectedEntry, 
+                        store_id: selectedStore, 
+                        start: document.getElementById('startDate').value, 
+                        end: document.getElementById('endDate').value,
+                        exclude_middle_priority: excludeMiddlePriority,
+                        exclude_after_5pm: excludeAfter5pm
+                    }) 
+                });
                 const data = await r.json();
                 document.getElementById('loading').style.display = 'none';
                 if (r.ok) { resultData = data; renderResults(data); } else alert(data.error || '分析失敗');
@@ -1046,7 +1248,20 @@ HTML = '''
         dropZone.addEventListener('drop', e => { dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
         fileInput.addEventListener('change', e => handleFiles(e.target.files));
         function handleFiles(files) { const msgs = Array.from(files).filter(f => f.name.endsWith('.msg')); if (!msgs.length) return; window.uploadFiles = msgs; document.getElementById('fileList').innerHTML = `<div class="alert alert-info py-1 mt-1 small">${msgs.length} 檔 <button class="btn btn-primary btn-sm ms-2" onclick="uploadAnalyze()">分析</button></div>`; }
-        async function uploadAnalyze() { if (!window.uploadFiles) return; const fd = new FormData(); window.uploadFiles.forEach(f => fd.append('f', f)); document.getElementById('loading').style.display = 'flex'; try { const r = await fetch('/api/upload', { method: 'POST', body: fd }); const data = await r.json(); document.getElementById('loading').style.display = 'none'; if (r.ok) { resultData = data; renderResults(data); } else alert(data.error); } catch (e) { document.getElementById('loading').style.display = 'none'; alert(e); } }
+        async function uploadAnalyze() { 
+            if (!window.uploadFiles) return; 
+            const fd = new FormData(); 
+            window.uploadFiles.forEach(f => fd.append('f', f)); 
+            fd.append('exclude_middle_priority', document.getElementById('excludeMiddlePriority').checked);
+            fd.append('exclude_after_5pm', document.getElementById('excludeAfter5pm').checked);
+            document.getElementById('loading').style.display = 'flex'; 
+            try { 
+                const r = await fetch('/api/upload', { method: 'POST', body: fd }); 
+                const data = await r.json(); 
+                document.getElementById('loading').style.display = 'none'; 
+                if (r.ok) { resultData = data; renderResults(data); } else alert(data.error); 
+            } catch (e) { document.getElementById('loading').style.display = 'none'; alert(e); } 
+        }
 
         // Render
         function renderResults(data) {
@@ -1275,8 +1490,23 @@ HTML = '''
                 .sort((a, b) => b.overdue_days - a.overdue_days)
                 .slice(0, 10);
             
+            if (overdueData.length === 0) {
+                // 沒有超期資料時顯示空圖
+                chart4 = new Chart(ctx, {
+                    type: 'bar',
+                    data: { labels: ['無超期'], datasets: [{ data: [0], backgroundColor: '#28a745' }] },
+                    options: { maintainAspectRatio: false, plugins: { legend: { display: false } } }
+                });
+                return;
+            }
+            
             const labels = overdueData.map(c => c.name);
             const data = overdueData.map(c => c.overdue_days);
+            
+            // 動態計算顏色閾值（基於最大值的比例）
+            const maxDays = Math.max(...data);
+            const highThreshold = maxDays * 0.7;  // 70% 以上為紅色
+            const midThreshold = maxDays * 0.4;   // 40%-70% 為橙色
             
             chart4 = new Chart(ctx, {
                 type: type === 'bar' ? 'bar' : type,
@@ -1285,7 +1515,7 @@ HTML = '''
                     datasets: [{ 
                         label: '超期天數',
                         data: data, 
-                        backgroundColor: data.map(d => d > 14 ? '#dc3545' : d > 7 ? '#FFA500' : '#FFE066')
+                        backgroundColor: data.map(d => d >= highThreshold ? '#dc3545' : d >= midThreshold ? '#FFA500' : '#FFE066')
                     }] 
                 },
                 options: { 
@@ -1420,17 +1650,48 @@ HTML = '''
             const overdueCount = overdueTasks.length;
             const totalOverdueDays = overdueTasks.reduce((s, t) => s + (t.overdue_days || 0), 0);
             const avgOverdueDays = overdueCount > 0 ? totalOverdueDays / overdueCount : 0;
+            const overdueRate = nonPendingTasks.length > 0 ? overdueCount / nonPendingTasks.length : 0;
             
-            let penalty = overdueCount * 0.5;
-            if (avgOverdueDays > 7) penalty += avgOverdueDays / 7;
-            if (nonPendingTasks.length > 0 && overdueCount / nonPendingTasks.length > 0.3) penalty += 2;
+            // 詳細計算扣分
+            let penaltyDetails = [];
+            let penalty = 0;
+            
+            // 1. 每個超期任務扣 0.5 分
+            const penaltyPerTask = overdueCount * 0.5;
+            penalty += penaltyPerTask;
+            if (penaltyPerTask > 0) {
+                penaltyDetails.push(`超期任務數×0.5 = ${overdueCount}×0.5 = ${penaltyPerTask.toFixed(1)}`);
+            }
+            
+            // 2. 平均超期天數 > 7 天，額外扣 (平均天數 / 7) 分
+            if (avgOverdueDays > 7) {
+                const penaltyAvg = avgOverdueDays / 7;
+                penalty += penaltyAvg;
+                penaltyDetails.push(`平均超期>7天懲罰 = ${avgOverdueDays.toFixed(1)}/7 = ${penaltyAvg.toFixed(1)}`);
+            }
+            
+            // 3. 超期率 > 30%，額外扣 2 分
+            if (overdueRate > 0.3) {
+                penalty += 2;
+                penaltyDetails.push(`超期率>${(overdueRate*100).toFixed(0)}%>30%，扣2分`);
+            }
             
             const header = `
                 <div class="alert alert-info py-2 mb-2">
-                    <strong>貢獻度計算：</strong><br>
-                    任務數: ${nonPendingTasks.length} 筆 | 基礎分: High(${highCount})×3 + Med(${medCount})×2 + Nor(${norCount})×1 = <strong>${baseScore}</strong><br>
-                    超期任務: ${overdueCount} 筆 (共 ${totalOverdueDays} 天) | 扣分: <span class="text-danger">-${penalty.toFixed(1)}</span><br>
-                    <strong>總分: ${Math.max(0, baseScore - penalty).toFixed(1)}</strong>
+                    <strong>📊 貢獻度計算公式：</strong><br>
+                    <hr class="my-1">
+                    <strong>基礎分：</strong> High(${highCount})×3 + Medium(${medCount})×2 + Normal(${norCount})×1 = <strong>${baseScore}</strong><br>
+                    <hr class="my-1">
+                    <strong>超期統計：</strong><br>
+                    • 超期任務數: ${overdueCount} 筆 / 總任務 ${nonPendingTasks.length} 筆 (超期率: ${(overdueRate*100).toFixed(1)}%)<br>
+                    • 總超期天數: ${totalOverdueDays} 天<br>
+                    • 平均超期: ${avgOverdueDays.toFixed(1)} 天/筆<br>
+                    <hr class="my-1">
+                    <strong>扣分計算：</strong><br>
+                    ${penaltyDetails.length > 0 ? penaltyDetails.map(d => `• ${d}`).join('<br>') : '• 無扣分'}<br>
+                    <strong>總扣分: <span class="text-danger">-${penalty.toFixed(1)}</span></strong><br>
+                    <hr class="my-1">
+                    <strong>最終得分: ${baseScore} - ${penalty.toFixed(1)} = <span class="text-success">${Math.max(0, baseScore - penalty).toFixed(1)}</span></strong>
                 </div>
             `;
             
@@ -1465,10 +1726,23 @@ HTML = '''
             if (!resultData) return;
             const t = resultData.all_tasks.find(x => x.title === title);
             if (!t) return;
+            const firstSeen = t.first_seen || t.mail_date || '-';
+            const lastSeen = t.last_seen || t.mail_date || '-';
+            const overdueDays = t.overdue_days || 0;
             showModal('任務詳情', `
                 <div class="row">
-                    <div class="col-md-6"><p><strong>任務:</strong> ${t.title}</p><p><strong>負責人:</strong> ${t.owners_str}</p><p><strong>優先級:</strong> <span class="badge badge-${t.priority}">${t.priority}</span></p></div>
-                    <div class="col-md-6"><p><strong>Due:</strong> <span class="${t.is_overdue && t.task_status !== 'completed' ? 'text-overdue' : ''}">${t.due || '-'}</span></p><p><strong>狀態:</strong> <span class="badge badge-${t.task_status}">${statusLabels[t.task_status]}</span></p><p><strong>花費:</strong> ${t.days_spent} 天 (${t.first_seen} ~ ${t.last_seen})</p></div>
+                    <div class="col-md-6">
+                        <p><strong>任務:</strong> ${t.title}</p>
+                        <p><strong>模組:</strong> ${t.module || '-'}</p>
+                        <p><strong>負責人:</strong> ${t.owners_str}</p>
+                        <p><strong>優先級:</strong> <span class="badge badge-${t.priority}">${t.priority}</span></p>
+                    </div>
+                    <div class="col-md-6">
+                        <p><strong>Due:</strong> <span class="${overdueDays > 0 ? 'text-overdue' : ''}">${t.due || '-'}</span></p>
+                        <p><strong>狀態:</strong> <span class="badge badge-${t.task_status}">${statusLabels[t.task_status]}</span></p>
+                        <p><strong>超期:</strong> <span class="${overdueDays > 0 ? 'text-overdue' : ''}">${overdueDays > 0 ? '+' + overdueDays + ' 天' : '無'}</span></p>
+                        <p><strong>花費:</strong> ${t.days_spent || 0} 天 (${firstSeen} ~ ${lastSeen})</p>
+                    </div>
                 </div>
             `);
         }
@@ -1602,8 +1876,11 @@ def api_outlook():
     global LAST_RESULT, LAST_DATA
     try:
         j = request.json
-        msgs = get_messages(j['entry_id'], j['store_id'], j['start'], j['end'])
-        parser = TaskParser()
+        exclude_middle_priority = j.get('exclude_middle_priority', True)
+        exclude_after_5pm = j.get('exclude_after_5pm', True)
+        
+        msgs = get_messages(j['entry_id'], j['store_id'], j['start'], j['end'], exclude_after_5pm)
+        parser = TaskParser(exclude_middle_priority=exclude_middle_priority)
         for m in msgs:
             parser.parse(m['subject'], m['body'], m['date'])
         stats = Stats()
@@ -1621,14 +1898,26 @@ def api_upload():
     global LAST_RESULT, LAST_DATA
     if not HAS_EXTRACT_MSG:
         return jsonify({'error': 'extract-msg not installed'}), 500
-    parser = TaskParser()
+    
+    exclude_middle_priority = request.form.get('exclude_middle_priority', 'true').lower() == 'true'
+    exclude_after_5pm = request.form.get('exclude_after_5pm', 'true').lower() == 'true'
+    
+    parser = TaskParser(exclude_middle_priority=exclude_middle_priority)
     for f in request.files.getlist('f'):
         if not f.filename.endswith('.msg'): continue
         try:
             with tempfile.NamedTemporaryFile(delete=False, suffix='.msg') as tmp:
                 f.save(tmp.name)
                 msg = extract_msg.Message(tmp.name)
-                parser.parse(msg.subject or "", msg.body or "", msg.date.strftime("%Y-%m-%d") if msg.date else "")
+                
+                # 檢查時間
+                mail_time = msg.date
+                if exclude_after_5pm and mail_time and hasattr(mail_time, 'hour'):
+                    if mail_time.hour >= 17:
+                        os.unlink(tmp.name)
+                        continue
+                
+                parser.parse(msg.subject or "", msg.body or "", mail_time.strftime("%Y-%m-%d") if mail_time else "")
                 os.unlink(tmp.name)
         except: pass
     stats = Stats()
