@@ -58,6 +58,8 @@ PRIORITY_WEIGHTS = {'high': 3, 'medium': 2, 'normal': 1}
 
 # 儲存 mail 內容
 MAIL_CONTENTS = {}
+# 儲存 mail 的 entry_id（用於下載附件）
+MAIL_ENTRIES = {}
 
 @dataclass
 class Task:
@@ -70,6 +72,7 @@ class Task:
     mail_subject: str = ""
     module: str = ""
     mail_id: str = ""
+    has_attachments: bool = False
 
 @dataclass
 class TaskTracker:
@@ -82,6 +85,7 @@ class TaskTracker:
     last_seen: str = ""
     appearances: List[str] = field(default_factory=list)
     in_last_mail: bool = False
+    has_attachments: bool = False
     
     def days_spent(self) -> int:
         if not self.first_seen or not self.last_seen:
@@ -171,13 +175,22 @@ def get_messages(entry_id, store_id, start_date, end_date, exclude_after_5pm: bo
             except:
                 pass
             
+            # 檢查是否有附件
+            has_attachments = False
+            try:
+                if hasattr(item, 'Attachments') and item.Attachments.Count > 0:
+                    has_attachments = True
+            except:
+                pass
+            
             messages.append({
                 "subject": item.Subject or "", 
                 "body": item.Body or "",
                 "html_body": html_body,
                 "date": rt.strftime("%Y-%m-%d") if hasattr(rt, 'strftime') else "",
                 "time": rt.strftime("%H:%M") if hasattr(rt, 'strftime') else "",
-                "sender": str(item.SenderName) if hasattr(item, 'SenderName') else ""
+                "sender": str(item.SenderName) if hasattr(item, 'SenderName') else "",
+                "has_attachments": has_attachments
             })
         except:
             continue
@@ -209,7 +222,7 @@ class TaskParser:
         line_lower = line.lower().strip()
         return 'middle priority' in line_lower or 'low priority' in line_lower
     
-    def parse(self, subject: str, body: str, mail_date: str = "", mail_time: str = "", html_body: str = ""):
+    def parse(self, subject: str, body: str, mail_date: str = "", mail_time: str = "", html_body: str = "", has_attachments: bool = False):
         import hashlib
         mail_id = hashlib.md5(f"{mail_date}_{mail_time}_{subject}".encode()).hexdigest()[:12]
         
@@ -220,6 +233,9 @@ class TaskParser:
             "date": mail_date,
             "time": mail_time
         }
+        
+        # 記錄此郵件是否有附件
+        self._current_has_attachments = has_attachments
         
         if '<html' in body.lower() or '<' in body:
             body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL | re.IGNORECASE)
@@ -252,6 +268,7 @@ class TaskParser:
                 if task:
                     task.module = self.current_module
                     task.mail_id = mail_id
+                    task.has_attachments = has_attachments
                     self.tasks.append(task)
     
     def _parse_task(self, content: str, mail_date: str = "", mail_subject: str = "") -> Optional[Task]:
@@ -342,6 +359,7 @@ class Stats:
             "mail_subject": task.mail_subject,
             "mail_id": task.mail_id,
             "module": task.module or "",
+            "has_attachments": task.has_attachments,
             "_key": self._task_key(task.title, task.due_date, task.owners)
         })
         
@@ -782,7 +800,7 @@ HTML = '''
                                     <div class="col-md-2">
                                         <label class="form-label small mb-1">&nbsp;</label>
                                         <div class="d-flex gap-1">
-                                            <button class="btn btn-primary btn-sm flex-grow-1" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button>
+                                            <button class="btn btn-primary btn-sm flex-grow-1" id="btnAnalyze" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button>
                                         </div>
                                     </div>
                                     <div class="col-md-2">
@@ -834,7 +852,7 @@ HTML = '''
                                                 <label class="form-check-label small">排除下午 5:00 後</label>
                                             </div>
                                         </div>
-                                        <button class="btn btn-primary btn-sm" onclick="analyzeUploadedFiles()"><i class="bi bi-search me-1"></i>分析上傳檔案</button>
+                                        <button class="btn btn-primary btn-sm" id="btnUploadAnalyze" onclick="analyzeUploadedFiles()"><i class="bi bi-search me-1"></i>分析上傳檔案</button>
                                     </div>
                                 </div>
                             </div>
@@ -1298,15 +1316,31 @@ HTML = '''
             filterAndRenderContribTable();
         }
         
+        // 標記是否使用上傳的郵件
+        let useUploadedMails = false;
+        
         // 切換 Review 模式
         async function toggleReviewMode() {
             reviewModeActive = !reviewModeActive;
             document.getElementById('reviewMode').style.display = reviewModeActive ? 'block' : 'none';
             document.getElementById('statsMode').style.display = reviewModeActive ? 'none' : (resultData ? 'block' : 'none');
             
-            // 切換到 Review 模式時自動載入郵件
-            if (reviewModeActive && selectedEntry) {
-                await loadMailsForReview(true);  // 重新載入
+            // Review 模式時禁用分析按鈕
+            document.getElementById('btnAnalyze').disabled = reviewModeActive;
+            document.getElementById('btnUploadAnalyze').disabled = reviewModeActive;
+            
+            // 切換到 Review 模式時
+            if (reviewModeActive) {
+                if (useUploadedMails && allMails.length > 0) {
+                    // 使用已上傳的郵件，只需重新渲染
+                    reviewMailsTotal = allMails.length;
+                    reviewMailsLoaded = allMails.length;
+                    renderMailList();
+                    updateReviewCount();
+                } else if (selectedEntry) {
+                    // 從 Outlook 載入
+                    await loadMailsForReview(true);
+                }
             }
         }
         
@@ -1319,6 +1353,9 @@ HTML = '''
         // 載入郵件列表 (Review 模式) - 支援分頁動態載入
         async function loadMailsForReview(reset = false) {
             if (!selectedEntry || reviewMailsLoading) return;
+            
+            // 如果使用上傳的郵件，不從 Outlook 載入
+            if (useUploadedMails) return;
             
             if (reset) {
                 allMails = [];
@@ -1388,12 +1425,20 @@ HTML = '''
             }
         }
         
+        // 滾動載入節流
+        let scrollThrottleTimer = null;
+        
         // 滾動載入更多
         function onMailListScroll(e) {
-            if (!reviewModeActive) return;
+            if (!reviewModeActive || useUploadedMails) return;
+            
+            // 節流：每 200ms 最多觸發一次
+            if (scrollThrottleTimer) return;
+            scrollThrottleTimer = setTimeout(() => { scrollThrottleTimer = null; }, 200);
+            
             const el = e.target;
-            // 當滾動到底部 100px 內時載入更多
-            if (el.scrollHeight - el.scrollTop - el.clientHeight < 100) {
+            // 當滾動到底部 150px 內時載入更多
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
                 if (reviewMailsLoaded < reviewMailsTotal && !reviewMailsLoading) {
                     loadMailsForReview(false);
                 }
@@ -1404,6 +1449,9 @@ HTML = '''
         async function analyze() {
             if (!selectedEntry) { alert('請選擇資料夾'); return; }
             document.getElementById('loading').style.display = 'flex';
+            
+            // 使用 Outlook 分析，重置上傳標誌
+            useUploadedMails = false;
             
             const excludeMiddlePriority = document.getElementById('excludeMiddlePriority').checked;
             const excludeAfter5pm = document.getElementById('excludeAfter5pm').checked;
@@ -2074,12 +2122,15 @@ HTML = '''
             const mail = allMails[index];
             if (!mail) return;
             
+            console.log('[selectMail] mail:', mail.mail_id, 'html_body exists:', !!mail.html_body, 'html_body len:', (mail.html_body || '').length);
+            
             document.getElementById('mailHeader').style.display = 'block';
             document.getElementById('mailSubjectView').textContent = mail.subject || '-';
             document.getElementById('mailDateView').textContent = `${mail.date} ${mail.time || ''}`;
             
-            // 如果已有完整內容則直接顯示
-            if (mail.html_body !== undefined) {
+            // 如果已有 HTML 內容則直接顯示
+            if (mail.html_body && mail.html_body.length > 0) {
+                console.log('[selectMail] Using existing html_body');
                 displayMailContent(mail);
                 return;
             }
@@ -2087,9 +2138,11 @@ HTML = '''
             // 否則從 API 取得完整內容
             if (mail.mail_id) {
                 try {
+                    console.log('[selectMail] Fetching from API:', mail.mail_id);
                     const r = await fetch(`/api/mail/${mail.mail_id}`);
                     if (r.ok) {
                         const fullMail = await r.json();
+                        console.log('[selectMail] API response html_body len:', (fullMail.html_body || '').length);
                         // 更新本地資料
                         allMails[index] = { ...mail, ...fullMail };
                         displayMailContent(allMails[index]);
@@ -2097,6 +2150,7 @@ HTML = '''
                         displayMailContent(mail);
                     }
                 } catch (e) {
+                    console.error('[selectMail] Error:', e);
                     displayMailContent(mail);
                 }
             } else {
@@ -2105,9 +2159,16 @@ HTML = '''
         }
         
         function displayMailContent(mail) {
-            if (mail.html_body) {
+            // 儲存當前郵件 ID
+            currentMailId = mail.mail_id;
+            
+            console.log('[displayMailContent] html_body:', !!mail.html_body, 'len:', (mail.html_body || '').length);
+            
+            if (mail.html_body && mail.html_body.length > 0) {
+                console.log('[displayMailContent] Using HTML mode');
                 document.getElementById('mailIframe').srcdoc = mail.html_body;
             } else {
+                console.log('[displayMailContent] Using text mode');
                 const textHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:sans-serif;font-size:14px;padding:15px;}</style></head><body><pre style="white-space:pre-wrap;">${escapeHtml(mail.body || '')}</pre></body></html>`;
                 document.getElementById('mailIframe').srcdoc = textHtml;
             }
@@ -2119,12 +2180,15 @@ HTML = '''
             if (mail.attachments && mail.attachments.length > 0) {
                 attachmentsRow.style.display = 'block';
                 attachmentsList.innerHTML = mail.attachments.map(att => 
-                    `<span class="badge bg-secondary me-1" title="${formatFileSize(att.size)}"><i class="bi bi-paperclip"></i> ${att.name}</span>`
+                    `<a href="/api/mail/${mail.mail_id}/attachment/${att.index}" class="badge bg-primary me-1 text-decoration-none" style="cursor:pointer" title="${formatFileSize(att.size)} - 點擊下載"><i class="bi bi-download"></i> ${att.name}</a>`
                 ).join('');
             } else {
                 attachmentsRow.style.display = 'none';
             }
         }
+        
+        // 儲存當前選中郵件的 mail_id
+        let currentMailId = null;
         
         function formatFileSize(bytes) {
             if (!bytes || bytes === 0) return '0 B';
@@ -2236,6 +2300,9 @@ HTML = '''
                 if (data.error) throw new Error(data.error);
                 resultData = data;
                 
+                // 標記使用上傳的郵件
+                useUploadedMails = true;
+                
                 // 關閉 Review 模式，顯示統計模式
                 reviewModeActive = false;
                 document.getElementById('reviewMode').style.display = 'none';
@@ -2247,6 +2314,8 @@ HTML = '''
                 // 更新郵件列表（供後續 Review 使用）
                 if (data.mails) {
                     allMails = data.mails;
+                    reviewMailsTotal = allMails.length;
+                    reviewMailsLoaded = allMails.length;
                 }
             } catch (e) { alert('錯誤: ' + e.message); }
             document.getElementById('loading').style.display = 'none';
@@ -2256,6 +2325,25 @@ HTML = '''
         renderUploadFileList();
 
         document.getElementById('detailModal').addEventListener('hidden.bs.modal', () => { currentModal = null; });
+        
+        // 頁籤切換事件 - 重置狀態
+        document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
+            tab.addEventListener('shown.bs.tab', (e) => {
+                const targetId = e.target.getAttribute('data-bs-target');
+                console.log('[Tab] Switched to:', targetId);
+                
+                // 切換到上傳頁籤時，重置 Outlook 模式狀態
+                if (targetId === '#tabUpload') {
+                    // 保持 selectedEntry 但標記為上傳模式
+                    console.log('[Tab] Upload mode');
+                }
+                // 切換到 Outlook 頁籤時，重置上傳模式狀態
+                else if (targetId === '#tabOutlook') {
+                    useUploadedMails = false;
+                    console.log('[Tab] Outlook mode, useUploadedMails reset');
+                }
+            });
+        });
     </script>
 </body>
 </html>
@@ -3188,7 +3276,7 @@ def api_outlook():
         msgs = get_messages(j['entry_id'], j['store_id'], j['start'], j['end'], exclude_after_5pm)
         parser = TaskParser(exclude_middle_priority=exclude_middle_priority)
         for m in msgs:
-            parser.parse(m['subject'], m['body'], m['date'], m.get('time', ''), m.get('html_body', ''))
+            parser.parse(m['subject'], m['body'], m['date'], m.get('time', ''), m.get('html_body', ''), m.get('has_attachments', False))
         stats = Stats()
         for t in parser.tasks:
             stats.add(t)
@@ -3208,8 +3296,6 @@ def api_outlook():
 def api_upload():
     global LAST_RESULT, LAST_DATA, MAIL_CONTENTS
     MAIL_CONTENTS.clear()
-    if not HAS_EXTRACT_MSG:
-        return jsonify({'error': 'extract-msg not installed'}), 500
     
     exclude_middle_priority = request.form.get('exclude_middle_priority', 'true').lower() == 'true'
     exclude_after_5pm = request.form.get('exclude_after_5pm', 'true').lower() == 'true'
@@ -3221,63 +3307,165 @@ def api_upload():
     for f in request.files.getlist('f'):
         if not f.filename.endswith('.msg'): continue
         try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.msg') as tmp:
-                f.save(tmp.name)
-                msg = extract_msg.Message(tmp.name)
+            # 建立暫存檔案並關閉，讓 Outlook 可以開啟
+            tmp_path = tempfile.mktemp(suffix='.msg')
+            f.save(tmp_path)
+            
+            # 優先使用 Outlook COM 讀取 .msg（可以正確處理 RTF 轉 HTML）
+            html_body = ""
+            body = ""
+            subject = ""
+            mail_time = None
+            sender = ""
+            attachments_info = []
+            outlook_success = False
+            
+            if HAS_OUTLOOK:
+                try:
+                    outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+                    msg = outlook.OpenSharedItem(tmp_path)
+                    
+                    subject = msg.Subject or ""
+                    body = msg.Body or ""
+                    html_body = msg.HTMLBody or ""
+                    mail_time = msg.ReceivedTime if hasattr(msg, 'ReceivedTime') else msg.SentOn
+                    sender = str(msg.SenderName) if hasattr(msg, 'SenderName') else ""
+                    
+                    # 取得附件資訊
+                    if hasattr(msg, 'Attachments'):
+                        for i in range(1, msg.Attachments.Count + 1):
+                            att = msg.Attachments.Item(i)
+                            attachments_info.append({
+                                "index": i,
+                                "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{i}",
+                                "size": att.Size if hasattr(att, 'Size') else 0
+                            })
+                    
+                    outlook_success = True
+                    print(f"[Upload] Via Outlook COM: {subject[:50]}, HTML len={len(html_body)}")
+                except Exception as outlook_err:
+                    print(f"[Upload] Outlook COM failed: {outlook_err}")
+                    html_body = ""
                 
-                mail_time = msg.date
+                # 如果 Outlook COM 失敗，使用 extract_msg
+                if not outlook_success and HAS_EXTRACT_MSG:
+                    try:
+                        msg = extract_msg.Message(tmp_path)
+                        subject = msg.subject or ""
+                        body = msg.body or ""
+                        mail_time = msg.date
+                        sender = str(msg.sender) if hasattr(msg, 'sender') else ""
+                        
+                        # 取得附件資訊
+                        if hasattr(msg, 'attachments') and msg.attachments:
+                            for i, att in enumerate(msg.attachments, 1):
+                                att_name = att.longFilename or att.shortFilename or f"attachment_{i}"
+                                attachments_info.append({
+                                    "index": i,
+                                    "name": att_name,
+                                    "size": len(att.data) if hasattr(att, 'data') and att.data else 0
+                                })
+                        
+                        print(f"[Upload] Via extract_msg: {subject[:50]}")
+                        
+                        # 嘗試取得 HTML（可能會失敗）
+                        try:
+                            raw_html = msg.htmlBody
+                            if raw_html:
+                                if isinstance(raw_html, bytes):
+                                    html_body = raw_html.decode('utf-8', errors='ignore')
+                                else:
+                                    html_body = str(raw_html)
+                        except:
+                            pass
+                    except Exception as msg_err:
+                        print(f"[Upload] extract_msg failed: {msg_err}")
+                
+                # 如果還是沒有 HTML，將純文字轉為 HTML
+                if not html_body and body:
+                    import html as html_module
+                    escaped_body = html_module.escape(body)
+                    html_body = f'''<!DOCTYPE html>
+<html><head><meta charset="UTF-8"></head>
+<body style="font-family: Calibri, Arial, sans-serif; font-size: 14px; padding: 20px;">
+<pre style="white-space: pre-wrap; font-family: inherit;">{escaped_body}</pre>
+</body></html>'''
+                    print(f"[Upload] Converted text to HTML, len={len(html_body)}")
+                
                 if exclude_after_5pm and mail_time and hasattr(mail_time, 'hour'):
                     if mail_time.hour >= 17:
-                        os.unlink(tmp.name)
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
                         continue
                 
                 mail_date_str = mail_time.strftime("%Y-%m-%d") if mail_time else ""
                 mail_time_str = mail_time.strftime("%H:%M") if mail_time else ""
                 
-                # 取得 HTML body，確保是字串
-                html_body = ""
-                try:
-                    raw_html = msg.htmlBody
-                    if raw_html:
-                        if isinstance(raw_html, bytes):
-                            html_body = raw_html.decode('utf-8', errors='ignore')
-                        else:
-                            html_body = str(raw_html)
-                except:
-                    pass
-                
                 # 生成 mail_id
-                mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{msg.subject or ''}".encode()).hexdigest()[:12]
+                mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{subject}".encode()).hexdigest()[:12]
+                
+                # 檢查是否有附件
+                has_attachments = len(attachments_info) > 0
+                if has_attachments:
+                    print(f"[Upload] Attachments: {len(attachments_info)}")
                 
                 # 存入 MAIL_CONTENTS（供 API 和匯出使用）
                 MAIL_CONTENTS[mail_id] = {
-                    "subject": msg.subject or "",
-                    "body": msg.body or "",
-                    "html_body": html_body,
-                    "date": mail_date_str,
-                    "time": mail_time_str
-                }
-                
-                parser.parse(msg.subject or "", msg.body or "", mail_date_str, mail_time_str, html_body)
-                
-                mails.append({
-                    "mail_id": mail_id,
-                    "subject": msg.subject or "",
-                    "body": msg.body or "",
+                    "subject": subject,
+                    "body": body,
                     "html_body": html_body,
                     "date": mail_date_str,
                     "time": mail_time_str,
-                    "sender": str(msg.sender) if hasattr(msg, 'sender') else ""
+                    "attachments": attachments_info
+                }
+                
+                parser.parse(subject, body, mail_date_str, mail_time_str, html_body, has_attachments)
+                
+                mails.append({
+                    "mail_id": mail_id,
+                    "subject": subject,
+                    "body": body,
+                    "html_body": html_body,
+                    "date": mail_date_str,
+                    "time": mail_time_str,
+                    "sender": sender,
+                    "has_attachments": has_attachments,
+                    "attachments": attachments_info
                 })
                 
-                os.unlink(tmp.name)
-        except: pass
+                # 清理暫存檔
+                try:
+                    os.unlink(tmp_path)
+                except:
+                    pass
+        except Exception as file_err:
+            print(f"[Upload] Error processing file: {file_err}")
+            # 嘗試清理暫存檔
+            try:
+                if 'tmp_path' in locals():
+                    os.unlink(tmp_path)
+            except:
+                pass
     
     stats = Stats()
     for t in parser.tasks:
         stats.add(t)
     LAST_RESULT = stats
     LAST_DATA = stats.summary()
+    
+    # 調試輸出
+    print(f"[Upload] MAIL_CONTENTS has {len(MAIL_CONTENTS)} mails")
+    for mid, mc in MAIL_CONTENTS.items():
+        has_html = bool(mc.get('html_body'))
+        html_len = len(mc.get('html_body', '')) if mc.get('html_body') else 0
+        print(f"  - {mid}: subject='{mc.get('subject', '')[:30]}', has_html={has_html}, html_len={html_len}")
+    
+    # 調試：檢查任務的 has_attachments
+    print(f"[Upload] Tasks with attachments:")
+    for t in LAST_DATA.get('all_tasks', []):
+        print(f"  - {t.get('title', '')[:30]}: has_attachments={t.get('has_attachments')}")
     
     result = dict(LAST_DATA)
     result['mails'] = mails
@@ -3293,7 +3481,7 @@ def api_mail(mail_id):
 @app.route('/api/review-mails', methods=['POST'])
 def api_review_mails():
     """Review 模式專用 - 只載入郵件列表，不做分析，支援分頁"""
-    global MAIL_CONTENTS
+    global MAIL_CONTENTS, MAIL_ENTRIES
     
     if not HAS_OUTLOOK:
         return jsonify({'error': 'Outlook not available'}), 500
@@ -3346,15 +3534,30 @@ def api_review_mails():
         end_idx = min(offset + limit, total_count)
         
         import hashlib
+        error_count = 0
         for i in range(start_idx, end_idx + 1):
             try:
                 msg = items.Item(i)
                 if not hasattr(msg, 'Subject'):
                     continue
                 
-                mail_time = msg.ReceivedTime
-                mail_date_str = mail_time.strftime("%Y-%m-%d") if mail_time else ""
-                mail_time_str = mail_time.strftime("%H:%M") if mail_time else ""
+                # 取得時間，處理可能的錯誤
+                mail_date_str = ""
+                mail_time_str = ""
+                try:
+                    mail_time = msg.ReceivedTime
+                    if mail_time:
+                        mail_date_str = mail_time.strftime("%Y-%m-%d")
+                        mail_time_str = mail_time.strftime("%H:%M")
+                except Exception as time_err:
+                    # 嘗試其他時間欄位
+                    try:
+                        mail_time = msg.SentOn
+                        if mail_time:
+                            mail_date_str = mail_time.strftime("%Y-%m-%d")
+                            mail_time_str = mail_time.strftime("%H:%M")
+                    except:
+                        pass
                 
                 # 生成 mail_id
                 mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{msg.Subject or ''}".encode()).hexdigest()[:12]
@@ -3379,6 +3582,15 @@ def api_review_mails():
                     "date": mail_date_str,
                     "time": mail_time_str
                 }
+                
+                # 儲存 entry_id 用於下載附件
+                try:
+                    MAIL_ENTRIES[mail_id] = {
+                        "entry_id": msg.EntryID,
+                        "store_id": store_id
+                    }
+                except:
+                    pass
                 
                 # 取得附件資訊
                 attachments = []
@@ -3407,7 +3619,11 @@ def api_review_mails():
                     "attachment_count": len(attachments)
                 })
             except Exception as item_err:
-                print(f"Error reading item {i}: {item_err}")
+                error_count += 1
+                if error_count <= 3:  # 只顯示前3個錯誤
+                    print(f"Error reading item {i}: {item_err}")
+                elif error_count == 4:
+                    print(f"... (更多錯誤省略)")
                 continue
         
         return jsonify({
@@ -3430,6 +3646,57 @@ def api_mail_attachments(mail_id):
         return jsonify(MAIL_CONTENTS[mail_id].get('attachments', []))
     return jsonify([])
 
+# 附件下載 API
+@app.route('/api/mail/<mail_id>/attachment/<int:att_index>')
+def api_download_attachment(mail_id, att_index):
+    """下載郵件附件"""
+    if not HAS_OUTLOOK:
+        return jsonify({'error': 'Outlook not available'}), 500
+    
+    if mail_id not in MAIL_ENTRIES:
+        return jsonify({'error': 'Mail entry not found'}), 404
+    
+    entry_info = MAIL_ENTRIES[mail_id]
+    
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        msg = outlook.GetItemFromID(entry_info['entry_id'], entry_info.get('store_id'))
+        
+        if not hasattr(msg, 'Attachments') or msg.Attachments.Count < att_index:
+            return jsonify({'error': 'Attachment not found'}), 404
+        
+        att = msg.Attachments.Item(att_index)
+        filename = att.FileName if hasattr(att, 'FileName') else f"attachment_{att_index}"
+        
+        # 儲存到暫存檔案
+        temp_path = os.path.join(tempfile.gettempdir(), f"att_{mail_id}_{att_index}_{filename}")
+        att.SaveAsFile(temp_path)
+        
+        # 讀取並返回
+        with open(temp_path, 'rb') as f:
+            content = f.read()
+        
+        # 清理暫存檔
+        try:
+            os.unlink(temp_path)
+        except:
+            pass
+        
+        # 判斷 MIME 類型
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(filename)
+        if not mime_type:
+            mime_type = 'application/octet-stream'
+        
+        response = Response(content, mimetype=mime_type)
+        response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        return response
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/excel')
 def api_excel():
     if not LAST_RESULT:
@@ -3442,6 +3709,13 @@ def api_export_html():
     
     if not LAST_DATA:
         return "請先執行分析", 400
+    
+    # 調試輸出
+    print(f"[Export HTML] MAIL_CONTENTS has {len(MAIL_CONTENTS)} mails")
+    for mid, mc in list(MAIL_CONTENTS.items())[:5]:  # 只顯示前5個
+        has_html = bool(mc.get('html_body'))
+        html_len = len(mc.get('html_body', '')) if mc.get('html_body') else 0
+        print(f"  - {mid}: has_html={has_html}, html_len={html_len}")
     
     # 使用主頁面模板，但注入預載數據
     import json
