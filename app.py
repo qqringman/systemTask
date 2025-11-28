@@ -716,6 +716,12 @@ HTML = '''
         .mail-subject { font-weight: 500; }
         .mail-meta { font-size: 0.75rem; color: #666; }
         .mail-preview { max-height: 60vh; overflow-y: auto; padding: 15px; background: #fff; }
+        
+        /* 頁籤樣式 */
+        .nav-tabs { border-bottom: none; }
+        .nav-tabs .nav-link { color: rgba(255,255,255,0.7); border: none; padding: 8px 16px; margin-right: 4px; border-radius: 6px 6px 0 0; background: rgba(255,255,255,0.1); }
+        .nav-tabs .nav-link:hover { color: white; background: rgba(255,255,255,0.2); }
+        .nav-tabs .nav-link.active { color: #333; background: white; font-weight: 500; }
     </style>
 </head>
 <body>
@@ -723,6 +729,7 @@ HTML = '''
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h6"><i class="bi bi-clipboard-data me-2"></i>System Task Dashboard v22</span>
             <div class="d-flex gap-2">
+                <button class="btn btn-outline-light btn-sm" onclick="exportExcel()"><i class="bi bi-file-excel me-1"></i>Excel</button>
                 <button class="btn btn-outline-light btn-sm" onclick="exportHTML()"><i class="bi bi-filetype-html me-1"></i>HTML</button>
             </div>
         </div>
@@ -880,7 +887,6 @@ HTML = '''
                 <div class="col"><div class="card stat-card" onclick="showByStatus('in_progress')"><div class="stat-number info" id="inProgressCount">0</div><div class="stat-label">進行中</div></div></div>
                 <div class="col"><div class="card stat-card" onclick="showByStatus('completed')"><div class="stat-number success" id="completedCount">0</div><div class="stat-label">已完成</div></div></div>
                 <div class="col"><div class="card stat-card" onclick="showOverdue()"><div class="stat-number danger" id="overdueCount">0</div><div class="stat-label">超期</div></div></div>
-                <div class="col"><div class="card stat-card" onclick="exportExcel()"><i class="bi bi-file-excel fs-5 text-success"></i><div class="stat-label">Excel</div></div></div>
             </div>
 
             <!-- 進度條 -->
@@ -1159,18 +1165,34 @@ HTML = '''
 
         // 資料夾樹 - 預設全部展開
         let firstLeafNode = null;  // 記錄第一個葉節點
-        let preferredNode = null;  // 優先選擇的節點 (Dias-System team 協助事項)
-        function buildTree(data, parent, isRoot = true) {
+        let preferredNode = null;  // 優先選擇的節點 (收件匣下的 Dias-System team 協助事項)
+        let inInbox = false;  // 追蹤是否在收件匣下
+        let inArchive = false;  // 追蹤是否在封存下
+        
+        function buildTree(data, parent, parentName = '') {
             const ul = document.createElement('ul');
             data.forEach(node => {
                 const li = document.createElement('li');
+                const nodeLower = node.name.toLowerCase();
+                const isInbox = node.name === '收件匣' || nodeLower === 'inbox' || nodeLower.includes('inbox');
+                const isArchive = node.name === '封存' || nodeLower === 'archive' || nodeLower.includes('archive') || nodeLower.includes('封存');
+                
                 if (node.children && node.children.length > 0) {
                     const toggle = document.createElement('span');
                     toggle.className = 'tree-toggle open';  // 預設展開
                     toggle.textContent = node.name;
                     toggle.onclick = function(e) { e.stopPropagation(); this.classList.toggle('open'); li.querySelector(':scope > ul').style.display = this.classList.contains('open') ? 'block' : 'none'; };
                     li.appendChild(toggle);
-                    const childUl = buildTree(node.children, li, false);
+                    
+                    // 進入收件匣或封存時設定標記
+                    const prevInInbox = inInbox;
+                    const prevInArchive = inArchive;
+                    if (isInbox) inInbox = true;
+                    if (isArchive) inArchive = true;
+                    const childUl = buildTree(node.children, li, node.name);
+                    inInbox = prevInInbox;  // 離開時恢復
+                    inArchive = prevInArchive;
+                    
                     childUl.style.display = 'block';  // 預設顯示
                     li.appendChild(childUl);
                 } else {
@@ -1187,8 +1209,13 @@ HTML = '''
                         document.getElementById('selectedFolder').textContent = node.name;
                     };
                     li.appendChild(item);
-                    // 優先選擇 "Dias-System team 協助事項"，否則記錄第一個葉節點
-                    if (node.name.includes('Dias-System') || node.name.includes('協助事項')) {
+                    
+                    // 優先選擇收件匣下的 "Dias-System team 協助事項"（排除封存）
+                    const isDiasFolder = node.name.includes('Dias-System') || node.name.includes('協助事項');
+                    const isInInboxNotArchive = (inInbox || parentName === '收件匣' || parentName === 'Inbox') && !inArchive;
+                    
+                    if (isDiasFolder && isInInboxNotArchive && !preferredNode) {
+                        // 只選第一個找到的，不覆蓋
                         preferredNode = { item: item, node: node };
                     } else if (!firstLeafNode) {
                         firstLeafNode = { item: item, node: node };
@@ -1198,9 +1225,9 @@ HTML = '''
             });
             return ul;
         }
-        document.getElementById('tree').appendChild(buildTree(treeData, null));
+        document.getElementById('tree').appendChild(buildTree(treeData, null, ''));
         
-        // 預設選擇：優先 Dias-System team 協助事項，否則第一個資料夾
+        // 預設選擇：優先收件匣下的 Dias-System team 協助事項，否則第一個資料夾
         const defaultNode = preferredNode || firstLeafNode;
         if (defaultNode) {
             defaultNode.item.classList.add('selected');
@@ -1600,20 +1627,34 @@ HTML = '''
             const c = resultData.contribution.find(x => x.name === name);
             if (!c) return;
             const detail = `
-                <div class="card mb-2">
-                    <div class="card-body">
-                        <h5>${name} 貢獻度計算明細</h5>
-                        <table class="table table-sm">
-                            <tr><td>任務數</td><td>${c.task_count}</td></tr>
-                            <tr><td>High 任務 × 3</td><td>${c.high} × 3 = ${c.high * 3}</td></tr>
-                            <tr><td>Medium 任務 × 2</td><td>${c.medium} × 2 = ${c.medium * 2}</td></tr>
-                            <tr><td>Normal 任務 × 1</td><td>${c.normal} × 1 = ${c.normal}</td></tr>
-                            <tr><th>基礎分</th><th>${c.base_score}</th></tr>
-                            <tr class="table-danger"><td>超期任務數</td><td>${c.overdue_count}</td></tr>
-                            <tr class="table-danger"><td>總超期天數</td><td>${c.overdue_days}</td></tr>
-                            <tr class="table-danger"><th>扣分</th><th>-${c.overdue_penalty}</th></tr>
-                            <tr class="table-success"><th>總分</th><th>${c.score}</th></tr>
-                        </table>
+                <div class="p-3">
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-person-circle fs-2 text-primary me-2"></i>
+                        <h5 class="mb-0">${name} 貢獻度計算明細</h5>
+                    </div>
+                    <table class="table table-sm data-table mb-0">
+                        <tbody>
+                            <tr><td class="fw-bold" style="width:50%">任務數</td><td>${c.task_count}</td></tr>
+                            <tr><td>High 任務 × 3</td><td><span class="badge badge-high me-1">${c.high}</span>× 3 = ${c.high * 3}</td></tr>
+                            <tr><td>Medium 任務 × 2</td><td><span class="badge badge-medium me-1">${c.medium}</span>× 2 = ${c.medium * 2}</td></tr>
+                            <tr><td>Normal 任務 × 1</td><td><span class="badge badge-normal me-1">${c.normal}</span>× 1 = ${c.normal}</td></tr>
+                            <tr class="table-active"><td class="fw-bold">基礎分</td><td class="fw-bold">${c.base_score}</td></tr>
+                        </tbody>
+                    </table>
+                    <table class="table table-sm data-table mt-2 mb-0">
+                        <tbody>
+                            <tr class="row-overdue"><td style="width:50%">超期任務數</td><td>${c.overdue_count}</td></tr>
+                            <tr class="row-overdue"><td>總超期天數</td><td>${c.overdue_days}</td></tr>
+                            <tr class="row-overdue"><td class="fw-bold">扣分 (天數 × 0.1 × -1)</td><td class="fw-bold text-danger">-${c.overdue_penalty}</td></tr>
+                        </tbody>
+                    </table>
+                    <table class="table table-sm data-table mt-2 mb-0">
+                        <tbody>
+                            <tr style="background:#d4edda"><td style="width:50%" class="fw-bold fs-5">總分</td><td class="fw-bold fs-5 text-success">${c.score}</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="text-muted small mt-3">
+                        <i class="bi bi-info-circle me-1"></i>計算公式: 總分 = 基礎分 - 扣分 = ${c.base_score} - ${c.overdue_penalty} = ${c.score}
                     </div>
                 </div>
             `;
