@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Task Dashboard v22 - Windows Outlook Integration
+Task Dashboard v23 - Windows Outlook Integration
 新功能：
 1. 成員超期圖表加寬，解決文字重疊
 2. 任務列表、成員統計、貢獻度 新增下拉篩選（模組、負責人、Due Date、優先級、超期、狀態）
@@ -73,6 +73,7 @@ class Task:
     module: str = ""
     mail_id: str = ""
     has_attachments: bool = False
+    attachments: list = field(default_factory=list)
 
 @dataclass
 class TaskTracker:
@@ -86,6 +87,7 @@ class TaskTracker:
     appearances: List[str] = field(default_factory=list)
     in_last_mail: bool = False
     has_attachments: bool = False
+    attachments: list = field(default_factory=list)
     
     def days_spent(self) -> int:
         if not self.first_seen or not self.last_seen:
@@ -175,13 +177,28 @@ def get_messages(entry_id, store_id, start_date, end_date, exclude_after_5pm: bo
             except:
                 pass
             
-            # 檢查是否有附件
+            # 檢查是否有附件並取得附件資訊
             has_attachments = False
+            attachments_info = []
             try:
                 if hasattr(item, 'Attachments') and item.Attachments.Count > 0:
                     has_attachments = True
+                    for j in range(1, item.Attachments.Count + 1):
+                        try:
+                            att = item.Attachments.Item(j)
+                            attachments_info.append({
+                                "index": j,
+                                "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{j}",
+                                "size": att.Size if hasattr(att, 'Size') else 0
+                            })
+                        except:
+                            pass
             except:
                 pass
+            
+            # 生成 mail_id
+            import hashlib
+            mail_id = hashlib.md5(f"{rt.strftime('%Y-%m-%d') if hasattr(rt, 'strftime') else ''}_{rt.strftime('%H:%M') if hasattr(rt, 'strftime') else ''}_{item.Subject or ''}".encode()).hexdigest()[:12]
             
             messages.append({
                 "subject": item.Subject or "", 
@@ -190,7 +207,9 @@ def get_messages(entry_id, store_id, start_date, end_date, exclude_after_5pm: bo
                 "date": rt.strftime("%Y-%m-%d") if hasattr(rt, 'strftime') else "",
                 "time": rt.strftime("%H:%M") if hasattr(rt, 'strftime') else "",
                 "sender": str(item.SenderName) if hasattr(item, 'SenderName') else "",
-                "has_attachments": has_attachments
+                "has_attachments": has_attachments,
+                "attachments": attachments_info,
+                "mail_id": mail_id
             })
         except:
             continue
@@ -222,20 +241,24 @@ class TaskParser:
         line_lower = line.lower().strip()
         return 'middle priority' in line_lower or 'low priority' in line_lower
     
-    def parse(self, subject: str, body: str, mail_date: str = "", mail_time: str = "", html_body: str = "", has_attachments: bool = False):
+    def parse(self, subject: str, body: str, mail_date: str = "", mail_time: str = "", html_body: str = "", has_attachments: bool = False, attachments: list = None, mail_id: str = None):
         import hashlib
-        mail_id = hashlib.md5(f"{mail_date}_{mail_time}_{subject}".encode()).hexdigest()[:12]
+        if not mail_id:
+            mail_id = hashlib.md5(f"{mail_date}_{mail_time}_{subject}".encode()).hexdigest()[:12]
         
         MAIL_CONTENTS[mail_id] = {
             "subject": subject,
             "body": body,
             "html_body": html_body,
             "date": mail_date,
-            "time": mail_time
+            "time": mail_time,
+            "attachments": attachments or []
         }
         
         # 記錄此郵件是否有附件
         self._current_has_attachments = has_attachments
+        self._current_attachments = attachments or []
+        self._current_mail_id = mail_id
         
         if '<html' in body.lower() or '<' in body:
             body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL | re.IGNORECASE)
@@ -269,6 +292,7 @@ class TaskParser:
                     task.module = self.current_module
                     task.mail_id = mail_id
                     task.has_attachments = has_attachments
+                    task.attachments = self._current_attachments
                     self.tasks.append(task)
     
     def _parse_task(self, content: str, mail_date: str = "", mail_subject: str = "") -> Optional[Task]:
@@ -360,6 +384,7 @@ class Stats:
             "mail_id": task.mail_id,
             "module": task.module or "",
             "has_attachments": task.has_attachments,
+            "attachments": task.attachments if hasattr(task, 'attachments') else [],
             "_key": self._task_key(task.title, task.due_date, task.owners)
         })
         
@@ -657,7 +682,7 @@ HTML = '''
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>System Task Dashboard v22</title>
+    <title>System Task Dashboard v23</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -696,6 +721,11 @@ HTML = '''
         .tree-item:hover { background: #e8f4fc; }
         .tree-item.selected { background: var(--primary); color: white; }
         .tree-item::before { content: "📁 "; }
+        
+        /* 結果頁籤樣式 */
+        #resultTabs .nav-link { color: #666; background: #f8f9fa; border: 1px solid #dee2e6; border-bottom: none; margin-right: 2px; }
+        #resultTabs .nav-link:hover { color: #2E75B6; background: #e8f4fc; }
+        #resultTabs .nav-link.active { color: #fff; background: #2E75B6; border-color: #2E75B6; }
         
         .data-table { width: 100%; font-size: 0.8rem; border-collapse: collapse; table-layout: auto; }
         .data-table thead th { background: #4a4a4a !important; color: white !important; font-weight: 600; cursor: pointer; padding: 8px 5px; white-space: nowrap; border: 1px solid #666; }
@@ -740,12 +770,26 @@ HTML = '''
         .nav-tabs .nav-link { color: rgba(255,255,255,0.7); border: none; padding: 8px 16px; margin-right: 4px; border-radius: 6px 6px 0 0; background: rgba(255,255,255,0.1); }
         .nav-tabs .nav-link:hover { color: white; background: rgba(255,255,255,0.2); }
         .nav-tabs .nav-link.active { color: #333; background: white; font-weight: 500; }
+        
+        /* 最大化功能 */
+        .card-maximize-btn { cursor: pointer; opacity: 0.7; font-size: 0.8rem; }
+        .card-maximize-btn:hover { opacity: 1; }
+        .card-fullscreen { position: fixed !important; top: 0; left: 0; width: 100vw !important; height: 100vh !important; z-index: 9999; border-radius: 0 !important; margin: 0 !important; }
+        .card-fullscreen .card-body { height: calc(100vh - 50px) !important; }
+        .card-fullscreen .table-container { height: calc(100vh - 150px) !important; }
+        .card-fullscreen .chart-container { height: calc(100vh - 100px) !important; }
+        .card-fullscreen #mailList { height: calc(100vh - 150px) !important; }
+        .card-fullscreen #mailIframe { height: calc(100vh - 120px) !important; }
+        .fullscreen-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 9998; display: none; }
     </style>
 </head>
 <body>
+    <!-- 全螢幕遮罩 -->
+    <div id="fullscreenOverlay" class="fullscreen-overlay" onclick="exitFullscreen()"></div>
+    
     <nav class="navbar navbar-dark mb-2 py-1">
         <div class="container-fluid">
-            <span class="navbar-brand mb-0 h6"><i class="bi bi-clipboard-data me-2"></i>System Task Dashboard v22</span>
+            <span class="navbar-brand mb-0 h6"><i class="bi bi-clipboard-data me-2"></i>System Task Dashboard v23</span>
             <div class="d-flex gap-2">
                 <button class="btn btn-outline-light btn-sm" onclick="exportExcel()"><i class="bi bi-file-excel me-1"></i>Excel</button>
                 <button class="btn btn-outline-light btn-sm" onclick="exportHTML()"><i class="bi bi-filetype-html me-1"></i>HTML</button>
@@ -782,48 +826,65 @@ HTML = '''
                             <div class="tab-pane fade show active" id="tabOutlook" role="tabpanel">
                                 {% if fc > 0 %}<div class="config-ok"><i class="bi bi-check-circle me-1"></i>Outlook 已連接 ({{ fc }} 資料夾)</div>{% endif %}
                                 <div class="row g-2">
-                                    <div class="col-md-4">
+                                    <div class="col-md-3">
                                         <label class="form-label small mb-1">選擇 Outlook 資料夾</label>
                                         <div class="tree-box" id="folderTree">
                                             <div class="tree" id="tree"></div>
                                         </div>
-                                        <div class="small text-muted mt-1">已選: <span id="selectedFolder">-</span></div>
+                                        <div class="small text-muted mt-1">已選: <span id="selectedFolder" style="color:#2E75B6;font-weight:600;">-</span></div>
                                     </div>
-                                    <div class="col-md-2">
-                                        <label class="form-label small mb-1">開始日期</label>
-                                        <input type="date" class="form-control form-control-sm" id="startDate" onchange="onDateChange()">
-                                    </div>
-                                    <div class="col-md-2">
-                                        <label class="form-label small mb-1">結束日期</label>
-                                        <input type="date" class="form-control form-control-sm" id="endDate" onchange="onDateChange()">
-                                    </div>
-                                    <div class="col-md-2">
-                                        <label class="form-label small mb-1">&nbsp;</label>
-                                        <div class="d-flex gap-1">
-                                            <button class="btn btn-primary btn-sm flex-grow-1" id="btnAnalyze" onclick="analyze()"><i class="bi bi-search me-1"></i>分析</button>
-                                        </div>
-                                    </div>
-                                    <div class="col-md-2">
-                                        <label class="form-label small mb-1">&nbsp;</label>
-                                        <div class="d-flex gap-1">
-                                            <button class="btn btn-outline-secondary btn-sm" onclick="toggleFilterSettings()"><i class="bi bi-funnel me-1"></i>篩選</button>
-                                            <button class="btn btn-outline-info btn-sm" onclick="toggleReviewMode()"><i class="bi bi-eye me-1"></i>Review</button>
-                                        </div>
-                                    </div>
-                                </div>
-                                <!-- 篩選設定 -->
-                                <div id="filterSettings" class="mt-2 p-2 bg-light rounded" style="display:none;">
-                                    <div class="row g-2">
-                                        <div class="col-auto">
-                                            <div class="form-check form-check-inline">
-                                                <input class="form-check-input" type="checkbox" id="excludeMiddlePriority" checked>
-                                                <label class="form-check-label small">排除 Middle priority 以下</label>
+                                    <div class="col-md-9">
+                                        <!-- 日期和篩選 -->
+                                        <div class="row g-2 mb-2">
+                                            <div class="col-md-2">
+                                                <label class="form-label small mb-1">開始日期</label>
+                                                <input type="date" class="form-control form-control-sm" id="startDate">
+                                            </div>
+                                            <div class="col-md-2">
+                                                <label class="form-label small mb-1">結束日期</label>
+                                                <input type="date" class="form-control form-control-sm" id="endDate">
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label small mb-1">進階篩選</label>
+                                                <div class="input-group input-group-sm">
+                                                    <select class="form-select form-select-sm" id="filterField" style="max-width:100px;">
+                                                        <option value="">全部</option>
+                                                        <option value="subject">主旨</option>
+                                                        <option value="sender">寄件者</option>
+                                                        <option value="recipient">收件者</option>
+                                                        <option value="body">內容</option>
+                                                    </select>
+                                                    <input type="text" class="form-control form-control-sm" id="filterKeyword" placeholder="關鍵字...">
+                                                    <div class="input-group-text">
+                                                        <input class="form-check-input mt-0" type="checkbox" id="filterHasAttachment" title="只顯示有附件">
+                                                        <i class="bi bi-paperclip ms-1" title="只顯示有附件"></i>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label small mb-1">&nbsp;</label>
+                                                <div class="d-flex gap-1">
+                                                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleFilterSettings()"><i class="bi bi-gear me-1"></i>分析選項</button>
+                                                    <button class="btn btn-primary btn-sm" id="btnAnalyze" onclick="analyze()"><i class="bi bi-bar-chart me-1"></i>統計分析</button>
+                                                    <button class="btn btn-outline-primary btn-sm" id="btnReview" onclick="loadReviewMode()"><i class="bi bi-envelope-open me-1"></i>Review</button>
+                                                </div>
                                             </div>
                                         </div>
-                                        <div class="col-auto">
-                                            <div class="form-check form-check-inline">
-                                                <input class="form-check-input" type="checkbox" id="excludeAfter5pm" checked>
-                                                <label class="form-check-label small">排除下午 5:00 後</label>
+                                        <!-- 分析選項 -->
+                                        <div id="filterSettings" class="p-2 bg-light rounded" style="display:none;">
+                                            <div class="row g-2">
+                                                <div class="col-auto">
+                                                    <div class="form-check form-check-inline">
+                                                        <input class="form-check-input" type="checkbox" id="excludeMiddlePriority" checked>
+                                                        <label class="form-check-label small">排除 Middle priority 以下</label>
+                                                    </div>
+                                                </div>
+                                                <div class="col-auto">
+                                                    <div class="form-check form-check-inline">
+                                                        <input class="form-check-input" type="checkbox" id="excludeAfter5pm" checked>
+                                                        <label class="form-check-label small">排除下午 5:00 後</label>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -862,46 +923,67 @@ HTML = '''
             </div>
         </div>
 
-        <!-- Review 模式 (mail 列表) -->
-        <div id="reviewMode" style="display:none;">
-            <div class="row g-2">
-                <div class="col-md-4">
-                    <div class="card" style="height:600px;">
-                        <div class="card-header">
-                            <span class="card-header-title"><i class="bi bi-envelope me-1"></i>郵件列表</span>
-                            <small id="reviewMailCount" class="text-white-50"></small>
-                        </div>
-                        <div class="table-toolbar">
-                            <input type="text" class="form-control form-control-sm" placeholder="🔍 搜尋..." id="mailSearch" onkeyup="filterMailList()">
-                        </div>
-                        <div id="mailList" style="flex:1;overflow-y:auto;" onscroll="onMailListScroll(event)"></div>
-                    </div>
-                </div>
-                <div class="col-md-8">
-                    <div class="card" style="height:600px;">
-                        <div class="card-header">
-                            <span class="card-header-title"><i class="bi bi-file-text me-1"></i>郵件內容</span>
-                            <div class="btn-group btn-group-sm">
-                                <button class="btn btn-outline-light btn-sm active" id="btnMailHtml" onclick="setMailViewMode('html')">HTML</button>
-                                <button class="btn btn-outline-light btn-sm" id="btnMailText" onclick="setMailViewMode('text')">純文字</button>
+        <!-- 結果區域 - 頁籤結構 -->
+        <div id="resultArea" style="display:none;">
+            <ul class="nav nav-tabs mb-2" id="resultTabs" role="tablist" style="border-bottom: 2px solid #2E75B6;">
+                <li class="nav-item" id="tabItem-stats">
+                    <button class="nav-link active" id="tab-stats" data-bs-toggle="tab" data-bs-target="#pane-stats" type="button" style="font-weight:600;">
+                        <i class="bi bi-bar-chart me-1"></i>統計分析
+                    </button>
+                </li>
+                <li class="nav-item" id="tabItem-review">
+                    <button class="nav-link" id="tab-review" data-bs-toggle="tab" data-bs-target="#pane-review" type="button" style="font-weight:600;">
+                        <i class="bi bi-eye me-1"></i>Review <span id="reviewMailCount" class="badge bg-warning text-dark ms-1">0</span>
+                    </button>
+                </li>
+            </ul>
+            <div class="tab-content">
+                <!-- Review 頁籤 -->
+                <div class="tab-pane fade" id="pane-review" role="tabpanel">
+                    <div class="row g-2">
+                        <div class="col-md-4">
+                            <div class="card" id="cardMailList" style="height:600px;">
+                                <div class="card-header">
+                                    <span class="card-header-title"><i class="bi bi-envelope me-1"></i>郵件列表</span>
+                                    <div class="d-flex align-items-center">
+                                        <small id="reviewMailCountDetail" class="text-white-50 me-2"></small>
+                                        <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardMailList')" title="最大化/還原"></i>
+                                    </div>
+                                </div>
+                                <div class="table-toolbar">
+                                    <input type="text" class="form-control form-control-sm" placeholder="🔍 搜尋主旨/寄件者..." id="mailSearch" onkeyup="filterMailList()">
+                                </div>
+                                <div id="mailList" style="flex:1;overflow-y:auto;" onscroll="onMailListScroll(event)"></div>
                             </div>
                         </div>
-                        <div class="card-body p-0" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
-                            <div id="mailHeader" class="p-2 bg-light border-bottom" style="display:none;">
-                                <div><strong>主旨:</strong> <span id="mailSubjectView">-</span></div>
-                                <div><strong>日期:</strong> <span id="mailDateView">-</span></div>
-                                <div id="mailAttachmentsRow" style="display:none;"><strong>附件:</strong> <span id="mailAttachmentsList"></span></div>
+                        <div class="col-md-8">
+                            <div class="card" id="cardMailContent" style="height:600px;">
+                                <div class="card-header">
+                                    <span class="card-header-title"><i class="bi bi-file-text me-1"></i>郵件內容</span>
+                                    <div class="d-flex align-items-center">
+                                        <div class="btn-group btn-group-sm me-2">
+                                            <button class="btn btn-outline-light btn-sm active" id="btnMailHtml" onclick="setMailViewMode('html')">HTML</button>
+                                            <button class="btn btn-outline-light btn-sm" id="btnMailText" onclick="setMailViewMode('text')">純文字</button>
+                                        </div>
+                                        <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardMailContent')" title="最大化/還原"></i>
+                                    </div>
+                                </div>
+                                <div class="card-body p-0" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
+                                    <div id="mailHeader" class="p-2 bg-light border-bottom" style="display:none;">
+                                        <div><strong>主旨:</strong> <span id="mailSubjectView">-</span></div>
+                                        <div><strong>日期:</strong> <span id="mailDateView">-</span></div>
+                                        <div id="mailAttachmentsRow" style="display:none;"><strong>附件:</strong> <span id="mailAttachmentsList"></span></div>
+                                    </div>
+                                    <div id="mailContentHtml" class="mail-preview" style="flex:1;overflow:hidden;"><iframe id="mailIframe" style="width:100%;height:100%;border:none;"></iframe></div>
+                                    <div id="mailContentText" class="mail-preview" style="display:none;flex:1;overflow-y:auto;font-family:monospace;white-space:pre-wrap;padding:15px;"></div>
+                                </div>
                             </div>
-                            <div id="mailContentHtml" class="mail-preview" style="flex:1;overflow:hidden;"><iframe id="mailIframe" style="width:100%;height:100%;border:none;"></iframe></div>
-                            <div id="mailContentText" class="mail-preview" style="display:none;flex:1;overflow-y:auto;font-family:monospace;white-space:pre-wrap;padding:15px;"></div>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-
-        <!-- 統計模式 -->
-        <div id="statsMode" style="display:none;">
+                
+                <!-- 統計分析頁籤 -->
+                <div class="tab-pane fade show active" id="pane-stats" role="tabpanel">
             <!-- 統計卡片 -->
             <div class="row g-2 mb-2">
                 <div class="col"><div class="card stat-card" onclick="showAllTasks()"><div class="stat-number" id="totalTasks">0</div><div class="stat-label">總任務</div></div></div>
@@ -929,23 +1011,29 @@ HTML = '''
             <!-- 圖表區 - 2x2 佈局讓圖表更寬 -->
             <div class="row g-2 mb-2">
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card" id="cardChart1">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-pie-chart me-1"></i>狀態分佈</span>
-                            <select class="form-select chart-select" style="width:90px" id="chart1Type" onchange="updateChart1()">
-                                <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
-                            </select>
+                            <div class="d-flex align-items-center">
+                                <select class="form-select chart-select me-2" style="width:90px" id="chart1Type" onchange="updateChart1()">
+                                    <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
+                                </select>
+                                <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart1')" title="最大化"></i>
+                            </div>
                         </div>
                         <div class="card-body py-2"><div class="chart-container"><canvas id="chart1"></canvas></div></div>
                     </div>
                 </div>
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card" id="cardChart4">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-person-exclamation me-1"></i>成員超期天數</span>
-                            <select class="form-select chart-select" style="width:120px" id="chart4Type" onchange="updateChart4()">
-                                <option value="stacked" selected>水平堆疊</option><option value="vstacked">垂直堆疊</option><option value="line">折線圖</option>
-                            </select>
+                            <div class="d-flex align-items-center">
+                                <select class="form-select chart-select me-2" style="width:120px" id="chart4Type" onchange="updateChart4()">
+                                    <option value="stacked" selected>水平堆疊</option><option value="vstacked">垂直堆疊</option><option value="line">折線圖</option>
+                                </select>
+                                <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart4')" title="最大化"></i>
+                            </div>
                         </div>
                         <div class="card-body py-2"><div class="chart-container"><canvas id="chart4"></canvas></div></div>
                     </div>
@@ -953,23 +1041,29 @@ HTML = '''
             </div>
             <div class="row g-2 mb-2">
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card" id="cardChart2">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-bar-chart me-1"></i>優先級分佈</span>
-                            <select class="form-select chart-select" style="width:90px" id="chart2Type" onchange="updateChart2()">
-                                <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
-                            </select>
+                            <div class="d-flex align-items-center">
+                                <select class="form-select chart-select me-2" style="width:90px" id="chart2Type" onchange="updateChart2()">
+                                    <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
+                                </select>
+                                <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart2')" title="最大化"></i>
+                            </div>
                         </div>
                         <div class="card-body py-2"><div class="chart-container"><canvas id="chart2"></canvas></div></div>
                     </div>
                 </div>
                 <div class="col-md-6">
-                    <div class="card">
+                    <div class="card" id="cardChart3">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-exclamation-triangle me-1"></i>超期狀況</span>
-                            <select class="form-select chart-select" style="width:90px" id="chart3Type" onchange="updateChart3()">
-                                <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
-                            </select>
+                            <div class="d-flex align-items-center">
+                                <select class="form-select chart-select me-2" style="width:90px" id="chart3Type" onchange="updateChart3()">
+                                    <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
+                                </select>
+                                <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart3')" title="最大化"></i>
+                            </div>
                         </div>
                         <div class="card-body py-2"><div class="chart-container"><canvas id="chart3"></canvas></div></div>
                     </div>
@@ -977,12 +1071,13 @@ HTML = '''
             </div>
 
             <!-- 任務列表 -->
-            <div class="card mb-2">
+            <div class="card mb-2" id="cardTaskList">
                 <div class="card-header">
                     <span class="card-header-title"><i class="bi bi-list-task me-1"></i>任務列表</span>
-                    <div>
+                    <div class="d-flex align-items-center">
                         <button class="btn btn-outline-light btn-sm me-1" onclick="toggleTaskFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
-                        <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('task')"><i class="bi bi-download me-1"></i>CSV</button>
+                        <button class="btn btn-outline-light btn-sm me-2" onclick="exportTableCSV('task')"><i class="bi bi-download me-1"></i>CSV</button>
+                        <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardTaskList')" title="最大化"></i>
                     </div>
                 </div>
                 <div class="table-toolbar" id="taskFilterBar" style="display:none;">
@@ -1032,12 +1127,13 @@ HTML = '''
             <!-- 成員統計 & 貢獻度 -->
             <div class="row g-2">
                 <div class="col-md-7">
-                    <div class="card">
+                    <div class="card" id="cardMemberStats">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-people me-1"></i>成員統計</span>
-                            <div>
+                            <div class="d-flex align-items-center">
                                 <button class="btn btn-outline-light btn-sm me-1" onclick="toggleMemberFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
-                                <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('member')"><i class="bi bi-download me-1"></i>CSV</button>
+                                <button class="btn btn-outline-light btn-sm me-2" onclick="exportTableCSV('member')"><i class="bi bi-download me-1"></i>CSV</button>
+                                <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardMemberStats')" title="最大化"></i>
                             </div>
                         </div>
                         <div class="table-toolbar" id="memberFilterBar" style="display:none;">
@@ -1074,12 +1170,13 @@ HTML = '''
                     </div>
                 </div>
                 <div class="col-md-5">
-                    <div class="card">
+                    <div class="card" id="cardContrib">
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-trophy me-1"></i>貢獻度 <small class="text-warning">(含超期減分)</small></span>
-                            <div>
+                            <div class="d-flex align-items-center">
                                 <button class="btn btn-outline-light btn-sm me-1" onclick="toggleContribFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
-                                <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('contrib')"><i class="bi bi-download me-1"></i>CSV</button>
+                                <button class="btn btn-outline-light btn-sm me-2" onclick="exportTableCSV('contrib')"><i class="bi bi-download me-1"></i>CSV</button>
+                                <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardContrib')" title="最大化"></i>
                             </div>
                         </div>
                         <div class="table-toolbar" id="contribFilterBar" style="display:none;">
@@ -1109,9 +1206,11 @@ HTML = '''
                     </div>
                 </div>
             </div>
-        </div>
+        </div><!-- end pane-stats -->
+        </div><!-- end tab-content -->
+        </div><!-- end resultArea -->
 
-        <div class="footer">© 2025 Task Dashboard v22 | Powered by Flask & Chart.js</div>
+        <div class="footer">© 2025 Task Dashboard v23 | Powered by Flask & Chart.js</div>
     </div>
 
     <!-- Modal -->
@@ -1318,29 +1417,84 @@ HTML = '''
         
         // 標記是否使用上傳的郵件
         let useUploadedMails = false;
+        // reviewModeActive 已在上方宣告
         
-        // 切換 Review 模式
-        async function toggleReviewMode() {
-            reviewModeActive = !reviewModeActive;
-            document.getElementById('reviewMode').style.display = reviewModeActive ? 'block' : 'none';
-            document.getElementById('statsMode').style.display = reviewModeActive ? 'none' : (resultData ? 'block' : 'none');
+        // 顯示結果區域
+        function showResultArea() {
+            document.getElementById('resultArea').style.display = 'block';
+        }
+        
+        // 載入 Review 模式
+        async function loadReviewMode() {
+            if (!selectedEntry && !useUploadedMails) {
+                alert('請先選擇資料夾');
+                return;
+            }
             
-            // Review 模式時禁用分析按鈕
-            document.getElementById('btnAnalyze').disabled = reviewModeActive;
-            document.getElementById('btnUploadAnalyze').disabled = reviewModeActive;
+            showResultArea();
             
-            // 切換到 Review 模式時
-            if (reviewModeActive) {
-                if (useUploadedMails && allMails.length > 0) {
-                    // 使用已上傳的郵件，只需重新渲染
-                    reviewMailsTotal = allMails.length;
-                    reviewMailsLoaded = allMails.length;
-                    renderMailList();
-                    updateReviewCount();
-                } else if (selectedEntry) {
-                    // 從 Outlook 載入
-                    await loadMailsForReview(true);
-                }
+            // 隱藏統計頁籤，只顯示 Review
+            document.getElementById('tabItem-stats').style.display = 'none';
+            document.getElementById('tabItem-review').style.display = 'block';
+            
+            // 切換到 Review 頁籤
+            const reviewTab = document.getElementById('tab-review');
+            const bsTab = new bootstrap.Tab(reviewTab);
+            bsTab.show();
+            
+            reviewModeActive = true;
+            
+            // 載入郵件
+            if (useUploadedMails && allMails.length > 0) {
+                // 使用已上傳的郵件
+                applyMailFilters();
+                updateReviewCount();
+            } else if (selectedEntry) {
+                // 從 Outlook 載入
+                await loadMailsForReview(true);
+            }
+        }
+        
+        // 進階篩選郵件
+        function applyMailFilters() {
+            const field = document.getElementById('filterField').value;
+            const keyword = document.getElementById('filterKeyword').value.toLowerCase();
+            const hasAttachment = document.getElementById('filterHasAttachment').checked;
+            
+            let filtered = [...allMailsOriginal];
+            
+            // 附件篩選
+            if (hasAttachment) {
+                filtered = filtered.filter(m => m.attachment_count > 0);
+            }
+            
+            // 關鍵字篩選
+            if (keyword) {
+                filtered = filtered.filter(m => {
+                    if (field === 'subject') return (m.subject || '').toLowerCase().includes(keyword);
+                    if (field === 'sender') return (m.sender || '').toLowerCase().includes(keyword);
+                    if (field === 'recipient') return (m.recipient || m.to || '').toLowerCase().includes(keyword);
+                    if (field === 'body') return (m.body || '').toLowerCase().includes(keyword);
+                    // 全部欄位
+                    return (m.subject || '').toLowerCase().includes(keyword) ||
+                           (m.sender || '').toLowerCase().includes(keyword) ||
+                           (m.recipient || m.to || '').toLowerCase().includes(keyword) ||
+                           (m.body || '').toLowerCase().includes(keyword);
+                });
+            }
+            
+            allMails = filtered;
+            renderMailList();
+            updateReviewCount();
+        }
+        
+        // 保存原始郵件列表
+        let allMailsOriginal = [];
+        
+        // 篩選變更時重新篩選
+        function onFilterChange() {
+            if (reviewModeActive && allMailsOriginal.length > 0) {
+                applyMailFilters();
             }
         }
         
@@ -1408,12 +1562,15 @@ HTML = '''
                 reviewMailsTotal = data.total || 0;
                 reviewMailsLoaded += (data.mails || []).length;
                 
-                // 合併郵件
-                allMails = allMails.concat(data.mails || []);
-                renderMailList();
+                // 合併郵件到原始列表
+                if (reset) {
+                    allMailsOriginal = data.mails || [];
+                } else {
+                    allMailsOriginal = allMailsOriginal.concat(data.mails || []);
+                }
                 
-                // 更新計數顯示
-                updateReviewCount();
+                // 應用篩選
+                applyMailFilters();
                 
             } catch (e) {
                 console.error('載入郵件失敗:', e);
@@ -1428,10 +1585,11 @@ HTML = '''
         // 更新 Review 模式計數
         function updateReviewCount() {
             const countEl = document.getElementById('reviewMailCount');
-            if (countEl) {
-                const hasMore = reviewMailsLoaded < reviewMailsTotal;
-                countEl.textContent = `已載入 ${allMails.length} / ${reviewMailsTotal} 封`;
-            }
+            const countDetailEl = document.getElementById('reviewMailCountDetail');
+            const text = `${allMails.length}`;
+            const detail = `已載入 ${allMailsOriginal.length} / ${reviewMailsTotal} 封`;
+            if (countEl) countEl.textContent = text;
+            if (countDetailEl) countDetailEl.textContent = detail;
         }
         
         // 滾動載入節流
@@ -1478,33 +1636,41 @@ HTML = '''
                         end: document.getElementById('endDate').value,
                         exclude_middle_priority: excludeMiddlePriority,
                         exclude_after_5pm: excludeAfter5pm,
-                        include_mails: reviewModeActive
+                        include_mails: true
                     }) 
                 });
                 const data = await r.json();
                 if (data.error) throw new Error(data.error);
                 
-                // 檢查是否有任務，若無則切換到 Review 模式
+                // 顯示結果區域
+                showResultArea();
+                
+                // 顯示兩個頁籤
+                document.getElementById('tabItem-stats').style.display = 'block';
+                document.getElementById('tabItem-review').style.display = 'block';
+                
+                // 切換到統計頁籤
+                const statsTab = document.getElementById('tab-stats');
+                const bsTab = new bootstrap.Tab(statsTab);
+                bsTab.show();
+                
+                reviewModeActive = false;
+                
+                // 檢查是否有任務
                 if (data.total_tasks === 0) {
-                    alert('未找到符合條件的任務，切換到 Review 模式');
-                    reviewModeActive = true;
-                    document.getElementById('reviewMode').style.display = 'block';
-                    document.getElementById('statsMode').style.display = 'none';
-                    // 載入郵件列表
-                    if (data.mails) {
-                        allMails = data.mails;
-                        renderMailList();
-                    }
-                } else {
-                    resultData = data;
-                    updateUI();
-                    if (!reviewModeActive) {
-                        document.getElementById('statsMode').style.display = 'block';
-                    }
-                    if (data.mails) {
-                        allMails = data.mails;
-                        renderMailList();
-                    }
+                    alert('未找到符合條件的任務，請切換到 Review 模式查看郵件');
+                }
+                
+                resultData = data;
+                updateUI();
+                
+                // 儲存郵件列表供 Review 使用
+                if (data.mails) {
+                    allMailsOriginal = data.mails;
+                    allMails = data.mails;
+                    reviewMailsTotal = data.mails.length;
+                    reviewMailsLoaded = data.mails.length;
+                    updateReviewCount();
                 }
             } catch (e) {
                 alert('錯誤: ' + e.message);
@@ -1709,6 +1875,39 @@ HTML = '''
         
         function esc(s) { return String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;'); }
 
+        // 根據附件類型返回對應圖示
+        function getAttachmentIcons(attachments, hasAttachments) {
+            // 如果有詳細附件資訊
+            if (attachments && attachments.length > 0) {
+                const icons = [];
+                let hasExcel = false, hasWord = false, hasPpt = false, hasPdf = false, hasImage = false, hasOther = false;
+                
+                attachments.forEach(att => {
+                    const name = (att.name || '').toLowerCase();
+                    if (name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')) hasExcel = true;
+                    else if (name.endsWith('.docx') || name.endsWith('.doc')) hasWord = true;
+                    else if (name.endsWith('.pptx') || name.endsWith('.ppt')) hasPpt = true;
+                    else if (name.endsWith('.pdf')) hasPdf = true;
+                    else if (name.endsWith('.png') || name.endsWith('.jpg') || name.endsWith('.jpeg') || name.endsWith('.gif')) hasImage = true;
+                    else hasOther = true;
+                });
+                
+                if (hasExcel) icons.push('<i class="bi bi-file-earmark-excel text-success" title="Excel"></i>');
+                if (hasWord) icons.push('<i class="bi bi-file-earmark-word text-primary" title="Word"></i>');
+                if (hasPpt) icons.push('<i class="bi bi-file-earmark-ppt text-danger" title="PowerPoint"></i>');
+                if (hasPdf) icons.push('<i class="bi bi-file-earmark-pdf text-danger" title="PDF"></i>');
+                if (hasImage) icons.push('<i class="bi bi-file-earmark-image text-info" title="圖片"></i>');
+                if (hasOther) icons.push('<i class="bi bi-paperclip text-secondary" title="附件"></i>');
+                
+                return icons.length > 0 ? `<span class="ms-1" style="font-size:0.75rem">${icons.join('')}</span>` : '';
+            }
+            // 如果只有 has_attachments flag
+            if (hasAttachments) {
+                return '<i class="bi bi-paperclip ms-1 text-secondary" style="font-size:0.75rem" title="有附件"></i>';
+            }
+            return '';
+        }
+        
         function renderTaskTable() {
             const state = tableState.task;
             state.pageSize = parseInt(document.getElementById('taskPageSize').value);
@@ -1722,6 +1921,7 @@ HTML = '''
                     <td>
                         <span style="cursor:pointer" onclick="showTaskDetail('${esc(t.title)}')">${t.title}</span>
                         ${t.mail_id ? `<i class="bi bi-envelope ms-1 text-primary" style="cursor:pointer;font-size:0.8rem" onclick="showMailPreview('${t.mail_id}', event)" title="預覽 Mail"></i>` : ''}
+                        ${getAttachmentIcons(t.attachments, t.has_attachments)}
                     </td>
                     <td>${t.owners_str}</td>
                     <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
@@ -2188,6 +2388,7 @@ HTML = '''
             // 顯示附件
             const attachmentsRow = document.getElementById('mailAttachmentsRow');
             const attachmentsList = document.getElementById('mailAttachmentsList');
+            console.log('[displayMailContent] attachments:', mail.attachments, 'attachment_count:', mail.attachment_count);
             if (mail.attachments && mail.attachments.length > 0) {
                 attachmentsRow.style.display = 'block';
                 attachmentsList.innerHTML = mail.attachments.map(att => 
@@ -2314,16 +2515,22 @@ HTML = '''
                 // 標記使用上傳的郵件
                 useUploadedMails = true;
                 
-                // 關閉 Review 模式，顯示統計模式
+                // 顯示結果區域
+                showResultArea();
+                
+                // 切換到統計頁籤
+                const statsTab = document.getElementById('tab-stats');
+                const bsTab = new bootstrap.Tab(statsTab);
+                bsTab.show();
+                
                 reviewModeActive = false;
-                document.getElementById('reviewMode').style.display = 'none';
                 
                 fillFilterOptions();
                 updateUI();
-                document.getElementById('statsMode').style.display = 'block';
                 
                 // 更新郵件列表（供後續 Review 使用）
                 if (data.mails) {
+                    allMailsOriginal = data.mails;
                     allMails = data.mails;
                     reviewMailsTotal = allMails.length;
                     reviewMailsLoaded = allMails.length;
@@ -2336,6 +2543,43 @@ HTML = '''
         renderUploadFileList();
 
         document.getElementById('detailModal').addEventListener('hidden.bs.modal', () => { currentModal = null; });
+        
+        // 防抖函數
+        function debounce(func, wait) {
+            let timeout;
+            return function(...args) {
+                clearTimeout(timeout);
+                timeout = setTimeout(() => func.apply(this, args), wait);
+            };
+        }
+        
+        // 進階篩選事件監聯 - 安全檢查
+        const filterFieldEl = document.getElementById('filterField');
+        const filterKeywordEl = document.getElementById('filterKeyword');
+        const filterHasAttachmentEl = document.getElementById('filterHasAttachment');
+        
+        if (filterFieldEl) filterFieldEl.addEventListener('change', onFilterChange);
+        if (filterKeywordEl) filterKeywordEl.addEventListener('input', debounce(onFilterChange, 300));
+        if (filterHasAttachmentEl) filterHasAttachmentEl.addEventListener('change', onFilterChange);
+        
+        // 結果頁籤切換事件 - 安全檢查
+        const tabReview = document.getElementById('tab-review');
+        const tabStats = document.getElementById('tab-stats');
+        
+        if (tabReview) {
+            tabReview.addEventListener('shown.bs.tab', () => {
+                reviewModeActive = true;
+                if (allMailsOriginal.length > 0) {
+                    applyMailFilters();
+                }
+            });
+        }
+        
+        if (tabStats) {
+            tabStats.addEventListener('shown.bs.tab', () => {
+                reviewModeActive = false;
+            });
+        }
         
         // 頁籤切換事件 - 重置狀態
         document.querySelectorAll('[data-bs-toggle="tab"]').forEach(tab => {
@@ -2354,6 +2598,62 @@ HTML = '''
                     console.log('[Tab] Outlook mode, useUploadedMails reset');
                 }
             });
+        });
+        
+        // 最大化/還原功能
+        let currentFullscreenCard = null;
+        
+        function toggleFullscreen(cardId) {
+            const card = document.getElementById(cardId);
+            const overlay = document.getElementById('fullscreenOverlay');
+            
+            if (card.classList.contains('card-fullscreen')) {
+                // 還原
+                card.classList.remove('card-fullscreen');
+                overlay.style.display = 'none';
+                currentFullscreenCard = null;
+                
+                // 重繪圖表
+                if (chart1) chart1.resize();
+                if (chart2) chart2.resize();
+                if (chart3) chart3.resize();
+                if (chart4) chart4.resize();
+            } else {
+                // 最大化
+                if (currentFullscreenCard) {
+                    currentFullscreenCard.classList.remove('card-fullscreen');
+                }
+                card.classList.add('card-fullscreen');
+                overlay.style.display = 'block';
+                currentFullscreenCard = card;
+                
+                // 重繪圖表
+                setTimeout(() => {
+                    if (chart1) chart1.resize();
+                    if (chart2) chart2.resize();
+                    if (chart3) chart3.resize();
+                    if (chart4) chart4.resize();
+                }, 100);
+            }
+        }
+        
+        function exitFullscreen() {
+            if (currentFullscreenCard) {
+                currentFullscreenCard.classList.remove('card-fullscreen');
+                document.getElementById('fullscreenOverlay').style.display = 'none';
+                currentFullscreenCard = null;
+                
+                // 重繪圖表
+                if (chart1) chart1.resize();
+                if (chart2) chart2.resize();
+                if (chart3) chart3.resize();
+                if (chart4) chart4.resize();
+            }
+        }
+        
+        // ESC 鍵退出全螢幕
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') exitFullscreen();
         });
     </script>
 </body>
@@ -2651,7 +2951,7 @@ def generate_export_html(data, report_date, mail_contents=None):
             </div>
         </div>
 
-        <div class="footer">© 2025 Task Dashboard v22 | Report Generated: {report_date}</div>
+        <div class="footer">© 2025 Task Dashboard v23 | Report Generated: {report_date}</div>
     </div>
 
     <!-- Modal -->
@@ -3287,7 +3587,8 @@ def api_outlook():
         msgs = get_messages(j['entry_id'], j['store_id'], j['start'], j['end'], exclude_after_5pm)
         parser = TaskParser(exclude_middle_priority=exclude_middle_priority)
         for m in msgs:
-            parser.parse(m['subject'], m['body'], m['date'], m.get('time', ''), m.get('html_body', ''), m.get('has_attachments', False))
+            parser.parse(m['subject'], m['body'], m['date'], m.get('time', ''), m.get('html_body', ''), 
+                        m.get('has_attachments', False), m.get('attachments', []), m.get('mail_id'))
         stats = Stats()
         for t in parser.tasks:
             stats.add(t)
@@ -3485,9 +3786,11 @@ def api_upload():
 
 @app.route('/api/mail/<mail_id>')
 def api_mail(mail_id):
-    # 如果已經有完整內容，直接返回
-    if mail_id in MAIL_CONTENTS and MAIL_CONTENTS[mail_id].get('html_body'):
-        return jsonify(MAIL_CONTENTS[mail_id])
+    # 如果已經有完整內容且已處理過 CID 和附件，直接返回
+    cached = MAIL_CONTENTS.get(mail_id)
+    if cached and cached.get('cid_processed') and cached.get('attachments') is not None:
+        print(f"[api_mail] Returning cached data for {mail_id}, attachments: {len(cached.get('attachments', []))}")
+        return jsonify(cached)
     
     # 如果有 entry_id，從 Outlook 讀取完整內容
     if mail_id in MAIL_ENTRIES and HAS_OUTLOOK:
@@ -3507,19 +3810,74 @@ def api_mail(mail_id):
             except:
                 pass
             
-            # 取得附件資訊
+            # 取得附件資訊並處理 CID 圖片
             attachments = []
+            cid_images = {}  # cid -> base64 data
             try:
                 if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
+                    import tempfile
+                    import base64
+                    import re
+                    
+                    print(f"[api_mail] Processing {msg.Attachments.Count} attachments")
+                    
                     for j in range(1, msg.Attachments.Count + 1):
                         att = msg.Attachments.Item(j)
+                        att_name = att.FileName if hasattr(att, 'FileName') else f"attachment_{j}"
+                        att_size = att.Size if hasattr(att, 'Size') else 0
+                        
+                        # 檢查是否為嵌入圖片 (有 Content-ID)
+                        content_id = ""
+                        try:
+                            # PropertyAccessor 取得 Content-ID
+                            content_id = att.PropertyAccessor.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F")
+                        except:
+                            pass
+                        
+                        # 如果是圖片且有 Content-ID，轉為 base64
+                        is_image = att_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'))
+                        if is_image and (content_id or 'image' in str(getattr(att, 'Type', '')).lower()):
+                            try:
+                                # 儲存到暫存檔再讀取
+                                tmp_path = tempfile.mktemp(suffix=os.path.splitext(att_name)[1])
+                                att.SaveAsFile(tmp_path)
+                                with open(tmp_path, 'rb') as f:
+                                    img_data = f.read()
+                                os.unlink(tmp_path)
+                                
+                                # 轉為 base64
+                                b64_data = base64.b64encode(img_data).decode('utf-8')
+                                
+                                # 判斷 MIME 類型
+                                ext = os.path.splitext(att_name)[1].lower()
+                                mime_types = {'.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.bmp': 'image/bmp', '.webp': 'image/webp'}
+                                mime_type = mime_types.get(ext, 'image/png')
+                                
+                                # 儲存 CID 映射
+                                cid_key = content_id.strip('<>') if content_id else att_name
+                                cid_images[cid_key] = f"data:{mime_type};base64,{b64_data}"
+                                
+                            except Exception as img_err:
+                                print(f"[api_mail] Error processing image {att_name}: {img_err}")
+                        
                         attachments.append({
                             "index": j,
-                            "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{j}",
-                            "size": att.Size if hasattr(att, 'Size') else 0
+                            "name": att_name,
+                            "size": att_size,
+                            "content_id": content_id
                         })
-            except:
-                pass
+                    
+                    # 替換 HTML 中的 cid: 連結
+                    if cid_images and html_body:
+                        for cid, data_url in cid_images.items():
+                            # 替換 cid:xxx 格式
+                            html_body = re.sub(f'src=["\']cid:{re.escape(cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                            # 也嘗試替換檔名
+                            html_body = re.sub(f'src=["\']cid:{re.escape(cid.split("@")[0] if "@" in cid else cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                        
+                        print(f"[api_mail] Replaced {len(cid_images)} CID images")
+            except Exception as att_err:
+                print(f"[api_mail] Error processing attachments: {att_err}")
             
             mail_time = None
             try:
@@ -3536,8 +3894,13 @@ def api_mail(mail_id):
                 "html_body": html_body,
                 "date": mail_time.strftime("%Y-%m-%d") if mail_time else "",
                 "time": mail_time.strftime("%H:%M") if mail_time else "",
-                "attachments": attachments
+                "attachments": attachments,
+                "cid_processed": True
             }
+            
+            print(f"[api_mail] Returning data for {mail_id}, attachments: {len(attachments)}")
+            for att in attachments:
+                print(f"  - {att['name']} ({att['size']} bytes)")
             
             # 快取供下次使用
             MAIL_CONTENTS[mail_id] = mail_data
@@ -3668,12 +4031,21 @@ def api_review_mails():
                 except:
                     pass
                 
+                # 取得收件者
+                recipient = ""
+                try:
+                    if hasattr(msg, 'To'):
+                        recipient = str(msg.To)
+                except:
+                    pass
+                
                 mails.append({
                     "mail_id": mail_id,
                     "subject": msg.Subject or "(無主旨)",
                     "date": mail_date_str,
                     "time": mail_time_str,
                     "sender": str(msg.SenderName) if hasattr(msg, 'SenderName') else "",
+                    "recipient": recipient,
                     "attachment_count": attachment_count
                 })
             except Exception as item_err:
@@ -3786,7 +4158,7 @@ def api_export_html():
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("Task Dashboard v22")
+    print("Task Dashboard v23")
     print("=" * 50)
     load_folders()
     print("開啟: http://127.0.0.1:5000")
