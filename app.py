@@ -54,6 +54,9 @@ LAST_DATA = None
 
 PRIORITY_WEIGHTS = {'high': 3, 'medium': 2, 'normal': 1}
 
+# 儲存 mail 內容的全域字典
+MAIL_CONTENTS = {}
+
 @dataclass
 class Task:
     title: str
@@ -64,6 +67,7 @@ class Task:
     mail_date: str = ""
     mail_subject: str = ""
     module: str = ""  # 大模組 [公版], [DIAS] 等
+    mail_id: str = ""  # mail 的唯一識別碼
 
 @dataclass
 class TaskTracker:
@@ -207,9 +211,17 @@ def get_messages(entry_id, store_id, start_date, end_date, exclude_after_5pm: bo
                 if rt.hour >= 17:  # 17:00 = 下午 5:00
                     continue
             
+            # 取得 HTML 內容
+            html_body = ""
+            try:
+                html_body = item.HTMLBody or ""
+            except:
+                pass
+            
             messages.append({
                 "subject": item.Subject or "", 
-                "body": item.Body or "", 
+                "body": item.Body or "",
+                "html_body": html_body,
                 "date": rt.strftime("%Y-%m-%d") if hasattr(rt, 'strftime') else "",
                 "time": rt.strftime("%H:%M") if hasattr(rt, 'strftime') else ""
             })
@@ -244,7 +256,21 @@ class TaskParser:
         line_lower = line.lower().strip()
         return 'middle priority' in line_lower or 'low priority' in line_lower
     
-    def parse(self, subject: str, body: str, mail_date: str = ""):
+    def parse(self, subject: str, body: str, mail_date: str = "", mail_time: str = "", html_body: str = ""):
+        # 生成 mail_id
+        import hashlib
+        mail_id = hashlib.md5(f"{mail_date}_{mail_time}_{subject}".encode()).hexdigest()[:12]
+        
+        # 儲存原始 mail 內容（包含 HTML）
+        MAIL_CONTENTS[mail_id] = {
+            "subject": subject,
+            "body": body,
+            "html_body": html_body,
+            "date": mail_date,
+            "time": mail_time
+        }
+        
+        original_body = body
         if '<html' in body.lower() or '<' in body:
             body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL | re.IGNORECASE)
             body = re.sub(r'<[^>]+>', '\n', body)
@@ -280,6 +306,7 @@ class TaskParser:
                 task = self._parse_task(content, mail_date, subject)
                 if task:
                     task.module = self.current_module
+                    task.mail_id = mail_id
                     self.tasks.append(task)
     
     def _parse_task(self, content: str, mail_date: str, mail_subject: str) -> Optional[Task]:
@@ -371,6 +398,8 @@ class Stats:
             "due": task.due_date,
             "status": task.status or "-",
             "mail_date": task.mail_date,
+            "mail_subject": task.mail_subject,
+            "mail_id": task.mail_id,
             "module": task.module or "",
             "_key": self._task_key(task.title, task.due_date, task.owners)
         })
@@ -1162,6 +1191,37 @@ HTML = '''
             </div>
         </div>
     </div>
+    
+    <!-- Mail Preview Modal -->
+    <div class="modal fade" id="mailModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header py-2 bg-primary text-white">
+                    <h6 class="modal-title"><i class="bi bi-envelope me-1"></i>Mail 預覽</h6>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div class="p-2 bg-light border-bottom d-flex justify-content-between align-items-center">
+                        <div>
+                            <div><strong>主旨：</strong><span id="mailSubject">-</span></div>
+                            <div><strong>日期：</strong><span id="mailDate">-</span> <span id="mailTime" class="text-muted"></span></div>
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary active" onclick="setMailView('html')" id="btnHtml">HTML</button>
+                            <button class="btn btn-outline-secondary" onclick="setMailView('text')" id="btnText">純文字</button>
+                        </div>
+                    </div>
+                    <div id="mailBodyHtml" style="height:60vh;overflow:hidden;">
+                        <iframe id="mailIframe" style="width:100%;height:100%;border:none;"></iframe>
+                    </div>
+                    <div id="mailBodyText" style="max-height:60vh;overflow-y:auto;padding:15px;font-family:monospace;font-size:13px;white-space:pre-wrap;background:#fafafa;display:none;"></div>
+                </div>
+                <div class="modal-footer py-1">
+                    <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">關閉</button>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
@@ -1316,10 +1376,13 @@ HTML = '''
             const pageData = state.filtered.slice(start, start + state.pageSize);
             
             document.getElementById('taskTableBody').innerHTML = pageData.map(t => `
-                <tr class="row-${t.task_status} ${t.overdue_days > 0 ? 'row-overdue' : ''}" onclick="showTaskDetail('${esc(t.title)}')">
+                <tr class="row-${t.task_status} ${t.overdue_days > 0 ? 'row-overdue' : ''}">
                     <td>${t.last_seen || '-'}</td>
                     <td><span class="badge bg-secondary" style="font-size:0.65rem">${t.module || '-'}</span></td>
-                    <td>${t.title}</td>
+                    <td>
+                        <span style="cursor:pointer" onclick="showTaskDetail('${esc(t.title)}')">${t.title}</span>
+                        ${t.mail_id ? `<i class="bi bi-envelope ms-1 text-primary" style="cursor:pointer;font-size:0.8rem" onclick="showMailPreview('${t.mail_id}', event)" title="預覽 Mail"></i>` : ''}
+                    </td>
                     <td>${t.owners_str}</td>
                     <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
                     <td class="${t.overdue_days > 0 ? 'text-overdue' : ''}">${t.due || '-'}</td>
@@ -1586,7 +1649,10 @@ HTML = '''
                             <tr class="row-${t.task_status} ${t.overdue_days > 0 ? 'row-overdue' : ''}">
                                 <td>${t.last_seen || t.mail_date || '-'}</td>
                                 <td><span class="badge bg-secondary" style="font-size:0.6rem">${t.module || '-'}</span></td>
-                                <td>${t.title}</td>
+                                <td>
+                                    ${t.title}
+                                    ${t.mail_id ? `<i class="bi bi-envelope ms-1 text-primary" style="cursor:pointer;font-size:0.8rem" onclick="showMailPreview('${t.mail_id}', event)" title="預覽 Mail"></i>` : ''}
+                                </td>
                                 <td>${t.owners_str || (t.owners ? t.owners.join('/') : '-')}</td>
                                 <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
                                 <td class="${t.overdue_days > 0 ? 'text-overdue' : ''}">${t.due || '-'}</td>
@@ -1746,6 +1812,73 @@ HTML = '''
                 </div>
             `);
         }
+        
+        // Mail 預覽
+        let currentMailData = null;
+        
+        async function showMailPreview(mailId, event) {
+            if (event) event.stopPropagation();
+            if (!mailId) { alert('此任務沒有關聯的 Mail'); return; }
+            
+            try {
+                const r = await fetch(`/api/mail/${mailId}`);
+                if (!r.ok) { alert('無法取得 Mail 內容'); return; }
+                const mail = await r.json();
+                currentMailData = mail;
+                
+                document.getElementById('mailSubject').textContent = mail.subject || '-';
+                document.getElementById('mailDate').textContent = mail.date || '-';
+                document.getElementById('mailTime').textContent = mail.time ? `(${mail.time})` : '';
+                
+                // 檢查是否有 HTML 內容
+                const hasHtml = mail.html_body && mail.html_body.trim().length > 0;
+                
+                if (hasHtml) {
+                    // 使用 HTML 內容
+                    setMailView('html');
+                    const iframe = document.getElementById('mailIframe');
+                    iframe.srcdoc = mail.html_body;
+                } else {
+                    // 只有純文字，轉換為簡單 HTML
+                    setMailView('html');
+                    const iframe = document.getElementById('mailIframe');
+                    const textAsHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{font-family:Segoe UI,Arial,sans-serif;font-size:14px;padding:20px;line-height:1.6;}</style></head><body><pre style="white-space:pre-wrap;font-family:inherit;">${escapeHtml(mail.body || '(無內容)')}</pre></body></html>`;
+                    iframe.srcdoc = textAsHtml;
+                }
+                
+                // 儲存純文字內容
+                document.getElementById('mailBodyText').textContent = mail.body || '(無內容)';
+                
+                new bootstrap.Modal(document.getElementById('mailModal')).show();
+            } catch (e) {
+                alert('錯誤: ' + e);
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function setMailView(mode) {
+            const htmlView = document.getElementById('mailBodyHtml');
+            const textView = document.getElementById('mailBodyText');
+            const btnHtml = document.getElementById('btnHtml');
+            const btnText = document.getElementById('btnText');
+            
+            if (mode === 'html') {
+                htmlView.style.display = 'block';
+                textView.style.display = 'none';
+                btnHtml.classList.add('active');
+                btnText.classList.remove('active');
+            } else {
+                htmlView.style.display = 'none';
+                textView.style.display = 'block';
+                btnHtml.classList.remove('active');
+                btnText.classList.add('active');
+            }
+        }
 
         function exportExcel() { window.location.href = '/api/excel'; }
         function exportHTML() { 
@@ -1873,7 +2006,8 @@ def index():
 
 @app.route('/api/outlook', methods=['POST'])
 def api_outlook():
-    global LAST_RESULT, LAST_DATA
+    global LAST_RESULT, LAST_DATA, MAIL_CONTENTS
+    MAIL_CONTENTS.clear()  # 清空之前的 mail 內容
     try:
         j = request.json
         exclude_middle_priority = j.get('exclude_middle_priority', True)
@@ -1882,7 +2016,7 @@ def api_outlook():
         msgs = get_messages(j['entry_id'], j['store_id'], j['start'], j['end'], exclude_after_5pm)
         parser = TaskParser(exclude_middle_priority=exclude_middle_priority)
         for m in msgs:
-            parser.parse(m['subject'], m['body'], m['date'])
+            parser.parse(m['subject'], m['body'], m['date'], m.get('time', ''), m.get('html_body', ''))
         stats = Stats()
         for t in parser.tasks:
             stats.add(t)
@@ -1895,7 +2029,8 @@ def api_outlook():
 
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
-    global LAST_RESULT, LAST_DATA
+    global LAST_RESULT, LAST_DATA, MAIL_CONTENTS
+    MAIL_CONTENTS.clear()  # 清空之前的 mail 內容
     if not HAS_EXTRACT_MSG:
         return jsonify({'error': 'extract-msg not installed'}), 500
     
@@ -1917,7 +2052,17 @@ def api_upload():
                         os.unlink(tmp.name)
                         continue
                 
-                parser.parse(msg.subject or "", msg.body or "", mail_time.strftime("%Y-%m-%d") if mail_time else "")
+                mail_date_str = mail_time.strftime("%Y-%m-%d") if mail_time else ""
+                mail_time_str = mail_time.strftime("%H:%M") if mail_time else ""
+                
+                # 取得 HTML 內容
+                html_body = ""
+                try:
+                    html_body = msg.htmlBody or ""
+                except:
+                    pass
+                
+                parser.parse(msg.subject or "", msg.body or "", mail_date_str, mail_time_str, html_body)
                 os.unlink(tmp.name)
         except: pass
     stats = Stats()
@@ -1932,6 +2077,13 @@ def api_excel():
     if not LAST_RESULT:
         return jsonify({'error': 'No data'}), 400
     return send_file(LAST_RESULT.excel(), mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', as_attachment=True, download_name=f'task_report_{datetime.now().strftime("%Y%m%d_%H%M")}.xlsx')
+
+@app.route('/api/mail/<mail_id>')
+def api_mail(mail_id):
+    """取得 mail 內容"""
+    if mail_id in MAIL_CONTENTS:
+        return jsonify(MAIL_CONTENTS[mail_id])
+    return jsonify({'error': 'Mail not found'}), 404
 
 @app.route('/api/export-html')
 def api_export_html():
@@ -1951,7 +2103,7 @@ def api_export_html():
 
 if __name__ == '__main__':
     print("=" * 50)
-    print("Task Dashboard v17")
+    print("Task Dashboard v19")
     print("=" * 50)
     load_folders()
     print("開啟: http://127.0.0.1:5000")
