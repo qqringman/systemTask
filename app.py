@@ -684,6 +684,12 @@ class Stats:
             total_overdue_days = sum(t.get("overdue_days", 0) for t in overdue_tasks)
             avg_overdue_days = total_overdue_days / overdue_task_count if overdue_task_count > 0 else 0
             
+            # 分別計算已完成和未完成的超期天數
+            completed_overdue_tasks = [t for t in overdue_tasks if t.get("task_status") == "completed"]
+            active_overdue_tasks = [t for t in overdue_tasks if t.get("task_status") != "completed"]
+            completed_overdue_days = sum(t.get("overdue_days", 0) for t in completed_overdue_tasks)
+            active_overdue_days = sum(t.get("overdue_days", 0) for t in active_overdue_tasks)
+            
             # 超期減分公式：
             # - 每個超期任務扣 0.5 分
             # - 平均超期天數 > 7 天，額外扣 (平均天數 / 7) 分
@@ -713,6 +719,8 @@ class Stats:
                 "base_score": weighted_score,
                 "overdue_count": overdue_task_count,
                 "overdue_days": total_overdue_days,
+                "completed_overdue_days": completed_overdue_days,  # 已完成超期天數
+                "active_overdue_days": active_overdue_days,        # 未完成超期天數
                 "overdue_penalty": round(overdue_penalty, 1),
                 "score": round(final_score, 1)
             })
@@ -983,6 +991,7 @@ HTML = '''
                                 <option value="doughnut">環形</option>
                                 <option value="pie">圓餅</option>
                                 <option value="bar">長條</option>
+                                <option value="polarArea">極區</option>
                             </select>
                         </div>
                         <div class="card-body py-2">
@@ -998,6 +1007,7 @@ HTML = '''
                                 <option value="doughnut">環形</option>
                                 <option value="pie">圓餅</option>
                                 <option value="bar">長條</option>
+                                <option value="polarArea">極區</option>
                             </select>
                         </div>
                         <div class="card-body py-2">
@@ -1013,6 +1023,7 @@ HTML = '''
                                 <option value="doughnut">環形</option>
                                 <option value="pie">圓餅</option>
                                 <option value="bar">長條</option>
+                                <option value="polarArea">極區</option>
                             </select>
                         </div>
                         <div class="card-body py-2">
@@ -1025,7 +1036,9 @@ HTML = '''
                         <div class="card-header">
                             <span class="card-header-title"><i class="bi bi-person-exclamation me-1"></i>成員超期天數</span>
                             <select class="form-select chart-select" id="chart4Type" onchange="updateChart4()">
-                                <option value="bar" selected>長條</option>
+                                <option value="stacked" selected>堆疊長條</option>
+                                <option value="bar">長條</option>
+                                <option value="line">折線</option>
                                 <option value="doughnut">環形</option>
                             </select>
                         </div>
@@ -1554,7 +1567,6 @@ HTML = '''
                 .slice(0, 10);
             
             if (overdueData.length === 0) {
-                // 沒有超期資料時顯示空圖
                 chart4 = new Chart(ctx, {
                     type: 'bar',
                     data: { labels: ['無超期'], datasets: [{ data: [0], backgroundColor: '#28a745' }] },
@@ -1564,36 +1576,89 @@ HTML = '''
             }
             
             const labels = overdueData.map(c => c.name);
-            const data = overdueData.map(c => c.overdue_days);
             
-            // 動態計算顏色閾值（基於最大值的比例）
-            const maxDays = Math.max(...data);
-            const highThreshold = maxDays * 0.7;  // 70% 以上為紅色
-            const midThreshold = maxDays * 0.4;   // 40%-70% 為橙色
-            
-            chart4 = new Chart(ctx, {
-                type: type === 'bar' ? 'bar' : type,
-                data: { 
-                    labels: labels, 
-                    datasets: [{ 
-                        label: '超期天數',
-                        data: data, 
-                        backgroundColor: data.map(d => d >= highThreshold ? '#dc3545' : d >= midThreshold ? '#FFA500' : '#FFE066')
-                    }] 
-                },
-                options: { 
-                    maintainAspectRatio: false, 
-                    indexAxis: type === 'bar' ? 'y' : undefined,
-                    plugins: { legend: { display: false } },
-                    scales: type === 'bar' ? { x: { beginAtZero: true } } : undefined,
-                    onClick: (e, el) => { 
-                        if (el.length) {
-                            const name = labels[el[0].index];
-                            showMemberOverdueTasks(name);
-                        }
+            if (type === 'stacked') {
+                // 堆疊長條圖：已完成 vs 未完成
+                const completedData = overdueData.map(c => c.completed_overdue_days || 0);
+                const activeData = overdueData.map(c => c.active_overdue_days || 0);
+                
+                chart4 = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            { label: '已完成超期', data: completedData, backgroundColor: '#6c757d', stack: 'stack1' },
+                            { label: '未完成超期', data: activeData, backgroundColor: '#dc3545', stack: 'stack1' }
+                        ]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        indexAxis: 'y',
+                        plugins: { legend: { display: true, position: 'top' } },
+                        scales: { x: { stacked: true, beginAtZero: true }, y: { stacked: true } },
+                        onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); }
                     }
-                }
-            });
+                });
+            } else if (type === 'line') {
+                // 折線圖
+                const completedData = overdueData.map(c => c.completed_overdue_days || 0);
+                const activeData = overdueData.map(c => c.active_overdue_days || 0);
+                
+                chart4 = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            { label: '已完成超期', data: completedData, borderColor: '#6c757d', backgroundColor: 'rgba(108,117,125,0.2)', fill: true, tension: 0.3 },
+                            { label: '未完成超期', data: activeData, borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.2)', fill: true, tension: 0.3 }
+                        ]
+                    },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: true, position: 'top' } },
+                        scales: { y: { beginAtZero: true } },
+                        onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); }
+                    }
+                });
+            } else if (type === 'doughnut') {
+                const data = overdueData.map(c => c.overdue_days);
+                const colors = ['#FF6B6B', '#FFA500', '#FFE066', '#74C0FC', '#69DB7C', '#B197FC', '#F783AC', '#20C997', '#ADB5BD', '#868E96'];
+                
+                chart4 = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: { labels: labels, datasets: [{ data: data, backgroundColor: colors.slice(0, labels.length) }] },
+                    options: {
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: true, position: 'right' } },
+                        onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); }
+                    }
+                });
+            } else {
+                // 一般長條圖
+                const data = overdueData.map(c => c.overdue_days);
+                const maxDays = Math.max(...data);
+                const highThreshold = maxDays * 0.7;
+                const midThreshold = maxDays * 0.4;
+                
+                chart4 = new Chart(ctx, {
+                    type: 'bar',
+                    data: { 
+                        labels: labels, 
+                        datasets: [{ 
+                            label: '超期天數',
+                            data: data, 
+                            backgroundColor: data.map(d => d >= highThreshold ? '#dc3545' : d >= midThreshold ? '#FFA500' : '#FFE066')
+                        }] 
+                    },
+                    options: { 
+                        maintainAspectRatio: false, 
+                        indexAxis: 'y',
+                        plugins: { legend: { display: false } },
+                        scales: { x: { beginAtZero: true } },
+                        onClick: (e, el) => { if (el.length) showMemberOverdueTasks(labels[el[0].index]); }
+                    }
+                });
+            }
         }
 
         // CSV Export
@@ -1901,13 +1966,16 @@ HTML_EXPORT = '''
     <meta charset="UTF-8">
     <title>Task Report - {{ date }}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <style>
-        body { background: #f5f7fa; padding: 20px; }
-        .card { border: none; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 15px; }
-        .card-header { background: #2E75B6; color: white; padding: 10px 15px; }
-        .stat-card { text-align: center; padding: 15px; }
-        .stat-number { font-size: 1.8rem; font-weight: bold; color: #2E75B6; }
+        body { background: #f5f7fa; padding: 15px; font-size: 14px; }
+        .card { border: none; border-radius: 10px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 12px; }
+        .card-header { background: #2E75B6; color: white; padding: 8px 12px; display: flex; justify-content: space-between; align-items: center; }
+        .stat-card { text-align: center; padding: 12px; cursor: pointer; transition: all 0.2s; }
+        .stat-card:hover { transform: translateY(-2px); box-shadow: 0 4px 15px rgba(0,0,0,0.15); }
+        .stat-number { font-size: 1.5rem; font-weight: bold; color: #2E75B6; }
         .stat-number.danger { color: #dc3545; }
         .stat-number.warning { color: #FFA500; }
         .stat-number.success { color: #28a745; }
@@ -1918,83 +1986,309 @@ HTML_EXPORT = '''
         .badge-completed { background: #28a745 !important; }
         .badge-pending { background: #FFA500 !important; }
         .badge-in_progress { background: #17a2b8 !important; }
-        .data-table { border-collapse: collapse; }
-        .data-table thead th { background: #4a4a4a !important; color: white !important; padding: 8px; border: 1px solid #666; }
+        .data-table { border-collapse: collapse; width: 100%; }
+        .data-table thead th { background: #4a4a4a !important; color: white !important; padding: 8px; border: 1px solid #666; cursor: pointer; }
         .data-table tbody td { padding: 6px; border: 1px solid #ddd; }
         .data-table tbody tr:nth-child(even) { background: #f9f9f9; }
+        .data-table tbody tr:hover { background: #e9ecef; }
         .text-overdue { color: #dc3545 !important; font-weight: bold; }
-        .chart-container { height: 250px; }
+        .row-pending { background: #fff8e6 !important; }
+        .row-in_progress { background: #e6f7ff !important; }
+        .row-overdue { border-left: 3px solid #dc3545 !important; }
+        .chart-container { height: 200px; }
+        .chart-select { width: auto; padding: 2px 8px; font-size: 0.75rem; }
         .rank-badge { display: inline-block; width: 24px; height: 24px; line-height: 24px; border-radius: 50%; text-align: center; font-weight: bold; color: white; font-size: 0.75rem; }
-        .rank-1 { background: #FFD700; }
-        .rank-2 { background: #C0C0C0; }
-        .rank-3 { background: #CD7F32; }
+        .rank-1 { background: linear-gradient(135deg, #FFD700, #FFA500); }
+        .rank-2 { background: linear-gradient(135deg, #C0C0C0, #A0A0A0); }
+        .rank-3 { background: linear-gradient(135deg, #CD7F32, #8B4513); }
         .rank-other { background: #6c757d; }
-        .footer { text-align: center; padding: 15px; color: #999; font-size: 0.75rem; border-top: 1px solid #eee; }
+        .table-toolbar { display: flex; gap: 8px; padding: 8px; background: #f8f9fa; align-items: center; flex-wrap: wrap; }
+        .footer { text-align: center; padding: 15px; color: #999; font-size: 0.75rem; border-top: 1px solid #eee; margin-top: 20px; }
         @media print { .no-print { display: none !important; } }
     </style>
 </head>
 <body>
     <div class="container-fluid">
-        <div class="text-center mb-4">
-            <h2 style="color:#2E75B6">Task Dashboard Report</h2>
-            <p class="text-muted">{{ date }} | 最後郵件: {{ data.last_mail_date }}</p>
-            <button class="btn btn-primary btn-sm no-print" onclick="window.print()">列印</button>
+        <div class="text-center mb-3">
+            <h3 style="color:#2E75B6"><i class="bi bi-clipboard-data me-2"></i>Task Dashboard Report</h3>
+            <p class="text-muted mb-1">{{ date }} | 最後郵件: {{ data.last_mail_date }}</p>
+            <button class="btn btn-primary btn-sm no-print" onclick="window.print()"><i class="bi bi-printer me-1"></i>列印</button>
         </div>
 
-        <div class="row g-2 mb-3">
-            <div class="col"><div class="card stat-card"><div class="stat-number">{{ data.total_tasks }}</div><div>總任務</div></div></div>
-            <div class="col"><div class="card stat-card"><div class="stat-number warning">{{ data.pending_count }}</div><div>Pending</div></div></div>
-            <div class="col"><div class="card stat-card"><div class="stat-number info">{{ data.in_progress_count }}</div><div>進行中</div></div></div>
-            <div class="col"><div class="card stat-card"><div class="stat-number danger">{{ data.overdue_count }}</div><div>超期</div></div></div>
+        <div class="row g-2 mb-2">
+            <div class="col"><div class="card stat-card" onclick="filterByStatus('all')"><div class="stat-number">{{ data.total_tasks }}</div><div class="small">總任務</div></div></div>
+            <div class="col"><div class="card stat-card" onclick="filterByStatus('pending')"><div class="stat-number warning">{{ data.pending_count }}</div><div class="small">Pending</div></div></div>
+            <div class="col"><div class="card stat-card" onclick="filterByStatus('in_progress')"><div class="stat-number info">{{ data.in_progress_count }}</div><div class="small">進行中</div></div></div>
+            <div class="col"><div class="card stat-card" onclick="filterByStatus('completed')"><div class="stat-number success">{{ data.completed_count }}</div><div class="small">已完成</div></div></div>
+            <div class="col"><div class="card stat-card" onclick="filterByOverdue()"><div class="stat-number danger">{{ data.overdue_count }}</div><div class="small">超期</div></div></div>
         </div>
 
-        <div class="row g-2 mb-3">
-            <div class="col-md-3"><div class="card"><div class="card-header">狀態分佈</div><div class="card-body"><div class="chart-container"><canvas id="c1"></canvas></div></div></div></div>
-            <div class="col-md-3"><div class="card"><div class="card-header">優先級</div><div class="card-body"><div class="chart-container"><canvas id="c2"></canvas></div></div></div></div>
-            <div class="col-md-3"><div class="card"><div class="card-header">超期狀況</div><div class="card-body"><div class="chart-container"><canvas id="c3"></canvas></div></div></div></div>
-            <div class="col-md-3"><div class="card"><div class="card-header">成員超期天數</div><div class="card-body"><div class="chart-container"><canvas id="c4"></canvas></div></div></div></div>
+        <div class="row g-2 mb-2">
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <span><i class="bi bi-pie-chart me-1"></i>狀態分佈</span>
+                        <select class="form-select chart-select no-print" id="c1Type" onchange="updateC1()">
+                            <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
+                        </select>
+                    </div>
+                    <div class="card-body py-2"><div class="chart-container"><canvas id="c1"></canvas></div></div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <span><i class="bi bi-bar-chart me-1"></i>優先級</span>
+                        <select class="form-select chart-select no-print" id="c2Type" onchange="updateC2()">
+                            <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
+                        </select>
+                    </div>
+                    <div class="card-body py-2"><div class="chart-container"><canvas id="c2"></canvas></div></div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <span><i class="bi bi-exclamation-triangle me-1"></i>超期狀況</span>
+                        <select class="form-select chart-select no-print" id="c3Type" onchange="updateC3()">
+                            <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option><option value="polarArea">極區</option>
+                        </select>
+                    </div>
+                    <div class="card-body py-2"><div class="chart-container"><canvas id="c3"></canvas></div></div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-header">
+                        <span><i class="bi bi-person-exclamation me-1"></i>成員超期</span>
+                        <select class="form-select chart-select no-print" id="c4Type" onchange="updateC4()">
+                            <option value="stacked">堆疊</option><option value="bar">長條</option><option value="line">折線</option><option value="doughnut">環形</option>
+                        </select>
+                    </div>
+                    <div class="card-body py-2"><div class="chart-container"><canvas id="c4"></canvas></div></div>
+                </div>
+            </div>
         </div>
 
-        <div class="card mb-3">
-            <div class="card-header">任務列表 {% if data._truncated %}(僅顯示前 200 筆){% endif %}</div>
+        <div class="card mb-2">
+            <div class="card-header"><span><i class="bi bi-list-task me-1"></i>任務列表</span></div>
+            <div class="table-toolbar no-print">
+                <input type="text" class="form-control form-control-sm" style="width:200px" placeholder="🔍 搜尋..." id="taskSearch" onkeyup="filterTasks()">
+                <select class="form-select form-select-sm" style="width:100px" id="statusFilter" onchange="filterTasks()">
+                    <option value="">全部狀態</option><option value="in_progress">進行中</option><option value="pending">Pending</option><option value="completed">已完成</option>
+                </select>
+                <select class="form-select form-select-sm" style="width:100px" id="priorityFilter" onchange="filterTasks()">
+                    <option value="">全部優先級</option><option value="high">High</option><option value="medium">Medium</option><option value="normal">Normal</option>
+                </select>
+                <select class="form-select form-select-sm" style="width:80px" id="pageSize" onchange="renderTaskTable()">
+                    <option value="50">50</option><option value="100">100</option><option value="200">200</option><option value="500">500</option>
+                </select>
+                <button class="btn btn-outline-secondary btn-sm" onclick="exportCSV()"><i class="bi bi-download"></i> CSV</button>
+                <span class="ms-auto text-muted small" id="taskInfo"></span>
+            </div>
             <div style="max-height:400px;overflow:auto">
-                <table class="table table-sm data-table mb-0">
-                    <thead><tr><th>Mail日期</th><th>模組</th><th>任務</th><th>負責人</th><th>優先級</th><th>Due</th><th>超期</th><th>狀態</th></tr></thead>
-                    <tbody>{% for t in data.all_tasks %}<tr class="{{ 'row-overdue' if t.overdue_days > 0 else '' }}"><td>{{ t.last_seen or '-' }}</td><td><span class="badge bg-secondary" style="font-size:0.6rem">{{ t.module or '-' }}</span></td><td>{{ t.title }}</td><td>{{ t.owners_str }}</td><td><span class="badge badge-{{ t.priority }}">{{ t.priority }}</span></td><td class="{{ 'text-overdue' if t.overdue_days > 0 else '' }}">{{ t.due or '-' }}</td><td class="{{ 'text-overdue' if t.overdue_days > 0 else '' }}">{{ '+' ~ t.overdue_days ~ '天' if t.overdue_days > 0 else '-' }}</td><td><span class="badge badge-{{ t.task_status }}">{{ {'completed':'已完成','pending':'Pending','in_progress':'進行中'}[t.task_status] }}</span></td></tr>{% endfor %}</tbody>
+                <table class="table table-sm data-table mb-0" id="taskTable">
+                    <thead>
+                        <tr>
+                            <th onclick="sortTasks('last_seen')">Mail日期 ↕</th>
+                            <th onclick="sortTasks('module')">模組 ↕</th>
+                            <th onclick="sortTasks('title')">任務 ↕</th>
+                            <th onclick="sortTasks('owners_str')">負責人 ↕</th>
+                            <th onclick="sortTasks('priority')">優先級 ↕</th>
+                            <th onclick="sortTasks('due')">Due ↕</th>
+                            <th onclick="sortTasks('overdue_days')">超期 ↕</th>
+                            <th onclick="sortTasks('task_status')">狀態 ↕</th>
+                        </tr>
+                    </thead>
+                    <tbody id="taskBody"></tbody>
                 </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center p-2 no-print">
+                <button class="btn btn-sm btn-outline-secondary" onclick="prevPage()">上一頁</button>
+                <span id="pageInfo" class="small"></span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="nextPage()">下一頁</button>
             </div>
         </div>
 
         <div class="row g-2">
             <div class="col-md-7">
                 <div class="card">
-                    <div class="card-header">成員統計</div>
-                    <table class="table table-sm data-table mb-0">
-                        <thead><tr><th>成員</th><th>總數</th><th>完成</th><th>進行</th><th>Pend</th><th>H</th><th>M</th><th>N</th></tr></thead>
-                        <tbody>{% for m in data.members %}<tr><td>{{ m.name }}</td><td>{{ m.total }}</td><td>{{ m.completed }}</td><td>{{ m.in_progress }}</td><td>{{ m.pending }}</td><td>{{ m.high }}</td><td>{{ m.medium }}</td><td>{{ m.normal }}</td></tr>{% endfor %}</tbody>
-                    </table>
+                    <div class="card-header"><span><i class="bi bi-people me-1"></i>成員統計</span></div>
+                    <div style="max-height:300px;overflow:auto">
+                        <table class="table table-sm data-table mb-0">
+                            <thead><tr><th>成員</th><th>總數</th><th>完成</th><th>進行</th><th>Pend</th><th>H</th><th>M</th><th>N</th></tr></thead>
+                            <tbody>{% for m in data.members %}<tr style="cursor:pointer" onclick="filterByMember('{{ m.name }}')"><td><strong>{{ m.name }}</strong></td><td>{{ m.total }}</td><td>{{ m.completed }}</td><td>{{ m.in_progress }}</td><td>{{ m.pending }}</td><td>{{ m.high }}</td><td>{{ m.medium }}</td><td>{{ m.normal }}</td></tr>{% endfor %}</tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
             <div class="col-md-5">
                 <div class="card">
-                    <div class="card-header">貢獻度排名（含超期減分）</div>
-                    <table class="table table-sm data-table mb-0">
-                        <thead><tr><th>#</th><th>成員</th><th>任務</th><th>基礎</th><th>超期</th><th>扣分</th><th>總分</th></tr></thead>
-                        <tbody>{% for c in data.contribution %}<tr><td><span class="rank-badge {{ 'rank-' ~ loop.index if loop.index <= 3 else 'rank-other' }}">{{ loop.index }}</span></td><td>{{ c.name }}</td><td>{{ c.task_count }}</td><td>{{ c.base_score }}</td><td class="{{ 'text-overdue' if c.overdue_count > 0 else '' }}">{{ c.overdue_count }}</td><td class="{{ 'text-overdue' if c.overdue_penalty > 0 else '' }}">-{{ c.overdue_penalty }}</td><td><strong>{{ c.score }}</strong></td></tr>{% endfor %}</tbody>
-                    </table>
+                    <div class="card-header"><span><i class="bi bi-trophy me-1"></i>貢獻度排名</span></div>
+                    <div style="max-height:300px;overflow:auto">
+                        <table class="table table-sm data-table mb-0">
+                            <thead><tr><th>#</th><th>成員</th><th>任務</th><th>基礎</th><th>超期</th><th>扣分</th><th>總分</th></tr></thead>
+                            <tbody>{% for c in data.contribution %}<tr style="cursor:pointer" onclick="filterByMember('{{ c.name }}')"><td><span class="rank-badge {{ 'rank-' ~ loop.index if loop.index <= 3 else 'rank-other' }}">{{ loop.index }}</span></td><td>{{ c.name }}</td><td>{{ c.task_count }}</td><td>{{ c.base_score }}</td><td class="{{ 'text-overdue' if c.overdue_count > 0 else '' }}">{{ c.overdue_count }}</td><td class="{{ 'text-overdue' if c.overdue_penalty > 0 else '' }}">-{{ c.overdue_penalty }}</td><td><strong>{{ c.score }}</strong></td></tr>{% endfor %}</tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="footer">© 2025 Vince Lin</div>
+        <div class="footer">© 2025 Task Dashboard | Generated: {{ date }}</div>
     </div>
+
     <script>
-        new Chart(document.getElementById('c1'), {type:'doughnut',data:{labels:['進行中','Pending'],datasets:[{data:[{{ data.in_progress_count }},{{ data.pending_count }}],backgroundColor:['#17a2b8','#FFA500']}]},options:{maintainAspectRatio:false,plugins:{legend:{position:'right'}}}});
-        new Chart(document.getElementById('c2'), {type:'doughnut',data:{labels:['High','Medium','Normal'],datasets:[{data:[{{ data.priority_counts.high }},{{ data.priority_counts.medium }},{{ data.priority_counts.normal }}],backgroundColor:['#FF6B6B','#FFE066','#74C0FC']}]},options:{maintainAspectRatio:false,plugins:{legend:{position:'right'}}}});
-        new Chart(document.getElementById('c3'), {type:'doughnut',data:{labels:['超期','未超期'],datasets:[{data:[{{ data.overdue_count }},{{ data.not_overdue_count }}],backgroundColor:['#dc3545','#28a745']}]},options:{maintainAspectRatio:false,plugins:{legend:{position:'right'}}}});
-        // 成員超期天數圖
-        const overdueData = [{% for c in data.contribution if c.overdue_days > 0 %}{ name: '{{ c.name }}', days: {{ c.overdue_days }} },{% endfor %}].sort((a,b) => b.days - a.days).slice(0, 10);
-        new Chart(document.getElementById('c4'), {type:'bar',data:{labels:overdueData.map(d=>d.name),datasets:[{label:'超期天數',data:overdueData.map(d=>d.days),backgroundColor:overdueData.map(d=>d.days>14?'#dc3545':d.days>7?'#FFA500':'#FFE066')}]},options:{maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}}}});
+        const statusLabels = { completed: '已完成', pending: 'Pending', in_progress: '進行中' };
+        const allTasks = {{ data.all_tasks | tojson }};
+        const contribution = {{ data.contribution | tojson }};
+        let filteredTasks = [...allTasks];
+        let currentPage = 0;
+        let sortKey = 'last_seen', sortDir = -1;
+        let chart1, chart2, chart3, chart4;
+
+        function filterTasks() {
+            const search = document.getElementById('taskSearch').value.toLowerCase();
+            const status = document.getElementById('statusFilter').value;
+            const priority = document.getElementById('priorityFilter').value;
+            filteredTasks = allTasks.filter(t => {
+                if (search && !JSON.stringify(t).toLowerCase().includes(search)) return false;
+                if (status && t.task_status !== status) return false;
+                if (priority && t.priority !== priority) return false;
+                return true;
+            });
+            currentPage = 0;
+            renderTaskTable();
+        }
+
+        function filterByStatus(status) {
+            document.getElementById('statusFilter').value = status === 'all' ? '' : status;
+            filterTasks();
+        }
+
+        function filterByOverdue() {
+            filteredTasks = allTasks.filter(t => t.overdue_days > 0);
+            currentPage = 0;
+            renderTaskTable();
+        }
+
+        function filterByMember(name) {
+            document.getElementById('taskSearch').value = name;
+            filterTasks();
+        }
+
+        function sortTasks(key) {
+            if (sortKey === key) sortDir *= -1; else { sortKey = key; sortDir = 1; }
+            filteredTasks.sort((a, b) => {
+                let va = a[key] || '', vb = b[key] || '';
+                if (typeof va === 'number') return (va - vb) * sortDir;
+                return String(va).localeCompare(String(vb)) * sortDir;
+            });
+            renderTaskTable();
+        }
+
+        function renderTaskTable() {
+            const pageSize = parseInt(document.getElementById('pageSize').value);
+            const start = currentPage * pageSize;
+            const pageData = filteredTasks.slice(start, start + pageSize);
+            
+            document.getElementById('taskBody').innerHTML = pageData.map(t => `
+                <tr class="row-${t.task_status} ${t.overdue_days > 0 ? 'row-overdue' : ''}">
+                    <td>${t.last_seen || '-'}</td>
+                    <td><span class="badge bg-secondary" style="font-size:0.6rem">${t.module || '-'}</span></td>
+                    <td>${t.title}</td>
+                    <td>${t.owners_str}</td>
+                    <td><span class="badge badge-${t.priority}">${t.priority}</span></td>
+                    <td class="${t.overdue_days > 0 ? 'text-overdue' : ''}">${t.due || '-'}</td>
+                    <td class="${t.overdue_days > 0 ? 'text-overdue' : ''}">${t.overdue_days > 0 ? '+' + t.overdue_days + '天' : '-'}</td>
+                    <td><span class="badge badge-${t.task_status}">${statusLabels[t.task_status]}</span></td>
+                </tr>
+            `).join('');
+            
+            const totalPages = Math.ceil(filteredTasks.length / pageSize) || 1;
+            document.getElementById('pageInfo').textContent = `第 ${currentPage + 1}/${totalPages} 頁`;
+            document.getElementById('taskInfo').textContent = `共 ${filteredTasks.length} 筆`;
+        }
+
+        function prevPage() { if (currentPage > 0) { currentPage--; renderTaskTable(); } }
+        function nextPage() { 
+            const pageSize = parseInt(document.getElementById('pageSize').value);
+            if ((currentPage + 1) * pageSize < filteredTasks.length) { currentPage++; renderTaskTable(); }
+        }
+
+        function exportCSV() {
+            const headers = ['Mail日期', '模組', '任務', '負責人', '優先級', 'Due', '超期天數', '狀態'];
+            const rows = filteredTasks.map(t => [t.last_seen||'', t.module||'', t.title, t.owners_str, t.priority, t.due||'', t.overdue_days||0, statusLabels[t.task_status]]);
+            let csv = [headers.join(','), ...rows.map(r => r.map(v => '"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\\n');
+            const blob = new Blob([csv], {type:'text/csv'});
+            const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tasks.csv'; a.click();
+        }
+
+        function updateC1() {
+            const type = document.getElementById('c1Type').value;
+            if (chart1) chart1.destroy();
+            chart1 = new Chart(document.getElementById('c1'), {
+                type: type, data: { labels: ['進行中', 'Pending', '已完成'], datasets: [{ data: [{{ data.in_progress_count }}, {{ data.pending_count }}, {{ data.completed_count }}], backgroundColor: ['#17a2b8', '#FFA500', '#28a745'] }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: type !== 'bar', position: 'right' } } }
+            });
+        }
+
+        function updateC2() {
+            const type = document.getElementById('c2Type').value;
+            if (chart2) chart2.destroy();
+            chart2 = new Chart(document.getElementById('c2'), {
+                type: type, data: { labels: ['High', 'Medium', 'Normal'], datasets: [{ data: [{{ data.priority_counts.high }}, {{ data.priority_counts.medium }}, {{ data.priority_counts.normal }}], backgroundColor: ['#FF6B6B', '#FFE066', '#74C0FC'] }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: type !== 'bar', position: 'right' } } }
+            });
+        }
+
+        function updateC3() {
+            const type = document.getElementById('c3Type').value;
+            if (chart3) chart3.destroy();
+            chart3 = new Chart(document.getElementById('c3'), {
+                type: type, data: { labels: ['超期', '未超期'], datasets: [{ data: [{{ data.overdue_count }}, {{ data.not_overdue_count }}], backgroundColor: ['#dc3545', '#28a745'] }] },
+                options: { maintainAspectRatio: false, plugins: { legend: { display: type !== 'bar', position: 'right' } } }
+            });
+        }
+
+        function updateC4() {
+            const type = document.getElementById('c4Type').value;
+            if (chart4) chart4.destroy();
+            const overdueData = contribution.filter(c => c.overdue_days > 0).sort((a, b) => b.overdue_days - a.overdue_days).slice(0, 10);
+            const labels = overdueData.map(c => c.name);
+            
+            if (type === 'stacked') {
+                chart4 = new Chart(document.getElementById('c4'), {
+                    type: 'bar', data: { labels, datasets: [
+                        { label: '已完成超期', data: overdueData.map(c => c.completed_overdue_days || 0), backgroundColor: '#6c757d', stack: 's' },
+                        { label: '未完成超期', data: overdueData.map(c => c.active_overdue_days || 0), backgroundColor: '#dc3545', stack: 's' }
+                    ]}, options: { maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: true, position: 'top' } }, scales: { x: { stacked: true }, y: { stacked: true } } }
+                });
+            } else if (type === 'line') {
+                chart4 = new Chart(document.getElementById('c4'), {
+                    type: 'line', data: { labels, datasets: [
+                        { label: '已完成超期', data: overdueData.map(c => c.completed_overdue_days || 0), borderColor: '#6c757d', backgroundColor: 'rgba(108,117,125,0.2)', fill: true },
+                        { label: '未完成超期', data: overdueData.map(c => c.active_overdue_days || 0), borderColor: '#dc3545', backgroundColor: 'rgba(220,53,69,0.2)', fill: true }
+                    ]}, options: { maintainAspectRatio: false, plugins: { legend: { display: true } } }
+                });
+            } else if (type === 'doughnut') {
+                chart4 = new Chart(document.getElementById('c4'), {
+                    type: 'doughnut', data: { labels, datasets: [{ data: overdueData.map(c => c.overdue_days), backgroundColor: ['#FF6B6B','#FFA500','#FFE066','#74C0FC','#69DB7C','#B197FC','#F783AC','#20C997','#ADB5BD','#868E96'] }] },
+                    options: { maintainAspectRatio: false, plugins: { legend: { position: 'right' } } }
+                });
+            } else {
+                const data = overdueData.map(c => c.overdue_days);
+                const max = Math.max(...data);
+                chart4 = new Chart(document.getElementById('c4'), {
+                    type: 'bar', data: { labels, datasets: [{ data, backgroundColor: data.map(d => d >= max*0.7 ? '#dc3545' : d >= max*0.4 ? '#FFA500' : '#FFE066') }] },
+                    options: { maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } } }
+                });
+            }
+        }
+
+        // 初始化
+        updateC1(); updateC2(); updateC3(); updateC4();
+        renderTaskTable();
     </script>
 </body>
 </html>
