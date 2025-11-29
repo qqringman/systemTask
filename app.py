@@ -800,19 +800,17 @@ HTML = '''
         /* 最大化功能 */
         .card-maximize-btn { cursor: pointer; opacity: 0.7; font-size: 0.8rem; }
         .card-maximize-btn:hover { opacity: 1; }
-        .card-fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; max-height: 100vh !important; z-index: 9999; border-radius: 0 !important; margin: 0 !important; }
-        .card-fullscreen .card-body { height: calc(100vh - 42px) !important; max-height: calc(100vh - 42px) !important; overflow: auto !important; display: flex !important; flex-direction: column !important; }
-        .card-fullscreen .table-container { height: calc(100vh - 150px) !important; max-height: calc(100vh - 150px) !important; }
-        .card-fullscreen .chart-container { height: calc(100vh - 100px) !important; }
-        .card-fullscreen #mailList { height: calc(100vh - 150px) !important; max-height: calc(100vh - 150px) !important; }
-        /* 郵件內容卡片最大化 */
-        #cardMailContent.card-fullscreen { display: flex !important; flex-direction: column !important; }
-        #cardMailContent.card-fullscreen > .card-header { flex-shrink: 0 !important; }
-        #cardMailContent.card-fullscreen > .card-body { flex: 1 1 0 !important; height: 0 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; overflow: hidden !important; }
-        #cardMailContent.card-fullscreen #mailHeader { flex-shrink: 0 !important; }
-        #cardMailContent.card-fullscreen #mailContentHtml { flex: 1 1 0 !important; height: 0 !important; min-height: 0 !important; overflow: hidden !important; display: block !important; }
-        #cardMailContent.card-fullscreen #mailContentText { flex: 1 1 0 !important; height: 0 !important; min-height: 0 !important; overflow-y: auto !important; }
-        #cardMailContent.card-fullscreen #mailIframe { width: 100% !important; height: 100% !important; border: none !important; display: block !important; }
+        .card-fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; max-height: 100vh !important; z-index: 9999; border-radius: 0 !important; margin: 0 !important; display: flex !important; flex-direction: column !important; }
+        .card-fullscreen > .card-header { flex-shrink: 0 !important; }
+        .card-fullscreen > .card-body, .card-fullscreen .card-body { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; overflow: auto !important; display: flex !important; flex-direction: column !important; }
+        .card-fullscreen .table-container { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; }
+        .card-fullscreen .chart-container { flex: 1 !important; height: 0 !important; min-height: 0 !important; }
+        .card-fullscreen #mailList { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; }
+        /* 郵件內容卡片最大化 - 使用 position 讓 iframe 填滿父容器 */
+        .card-fullscreen #mailHeader { flex-shrink: 0 !important; }
+        .card-fullscreen #mailContentHtml { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; position: relative !important; }
+        .card-fullscreen #mailContentText { flex: 1 !important; min-height: 0 !important; overflow-y: auto !important; }
+        .card-fullscreen #mailIframe { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }
         .fullscreen-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 9998; display: none; }
     </style>
 </head>
@@ -1014,7 +1012,7 @@ HTML = '''
                                                         <div><strong>日期:</strong> <span id="mailDateView">-</span></div>
                                                         <div id="mailAttachmentsRow" style="display:none;"><strong>附件:</strong> <span id="mailAttachmentsList"></span></div>
                                                     </div>
-                                                    <div id="mailContentHtml" class="mail-preview" style="flex:1 1 auto;overflow:hidden;min-height:0;"><iframe id="mailIframe" style="width:100%;height:100%;border:none;"></iframe></div>
+                                                    <div id="mailContentHtml" class="mail-preview" style="flex:1 1 auto;overflow:hidden;min-height:0;position:relative;"><iframe id="mailIframe" style="position:absolute;top:0;left:0;width:100%;height:100%;border:none;"></iframe></div>
                                                     <div id="mailContentText" class="mail-preview" style="display:none;flex:1 1 auto;overflow-y:auto;font-family:monospace;white-space:pre-wrap;padding:15px;min-height:0;"></div>
                                                 </div>
                                             </div>
@@ -2527,6 +2525,28 @@ HTML = '''
             } else {
                 attachmentsRow.style.display = 'none';
             }
+            
+            // 如果卡片是最大化狀態，重新調整 iframe 高度
+            setTimeout(adjustMailContentHeight, 50);
+        }
+        
+        function adjustMailContentHeight() {
+            const card = document.getElementById('cardMailContent');
+            if (!card || !card.classList.contains('card-fullscreen')) return;
+            
+            const cardBody = card.querySelector('.card-body');
+            const mailHeader = document.getElementById('mailHeader');
+            const container = document.getElementById('mailContentHtml');
+            const iframe = document.getElementById('mailIframe');
+            
+            if (!cardBody || !container || !iframe) return;
+            
+            const bodyHeight = cardBody.offsetHeight;
+            const headerHeight = mailHeader ? mailHeader.offsetHeight : 0;
+            const availableHeight = bodyHeight - headerHeight;
+            
+            container.style.cssText = `height: ${availableHeight}px; position: relative; overflow: hidden;`;
+            iframe.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none;';
         }
         
         // 儲存當前選中郵件的 mail_id
@@ -2752,6 +2772,27 @@ HTML = '''
                 overlay.style.display = 'none';
                 currentFullscreenCard = null;
                 
+                // 還原原始高度
+                if (card._originalHeight) {
+                    card.style.height = card._originalHeight;
+                }
+                
+                // 還原子元素樣式
+                const cardBody = card.querySelector('.card-body');
+                if (cardBody && cardBody._originalStyle) {
+                    cardBody.style.cssText = cardBody._originalStyle;
+                }
+                
+                // 還原郵件內容區域樣式
+                const mailContentHtml = card.querySelector('#mailContentHtml');
+                if (mailContentHtml) {
+                    mailContentHtml.style.cssText = 'flex:1 1 auto;overflow:hidden;min-height:0;';
+                }
+                const mailIframe = card.querySelector('#mailIframe');
+                if (mailIframe) {
+                    mailIframe.style.cssText = 'width:100%;height:100%;border:none;';
+                }
+                
                 // 重繪圖表
                 if (chart1) chart1.resize();
                 if (chart2) chart2.resize();
@@ -2761,17 +2802,52 @@ HTML = '''
                 // 最大化
                 if (currentFullscreenCard) {
                     currentFullscreenCard.classList.remove('card-fullscreen');
+                    if (currentFullscreenCard._originalHeight) {
+                        currentFullscreenCard.style.height = currentFullscreenCard._originalHeight;
+                    }
                 }
+                
+                // 儲存原始高度並清除 inline style
+                card._originalHeight = card.style.height;
+                card.style.height = '100vh';
+                
+                // 強制設定 card-body 樣式
+                const cardBody = card.querySelector('.card-body');
+                if (cardBody) {
+                    cardBody._originalStyle = cardBody.style.cssText;
+                    cardBody.style.cssText = 'flex: 1 !important; height: 0 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; overflow: hidden !important;';
+                }
+                
+                // 強制設定郵件內容區域 - 使用相對定位+絕對定位讓 iframe 填滿
+                const mailContentHtml = card.querySelector('#mailContentHtml');
+                if (mailContentHtml) {
+                    mailContentHtml.style.cssText = 'flex: 1 !important; min-height: 0 !important; overflow: hidden !important; position: relative !important;';
+                }
+                const mailIframe = card.querySelector('#mailIframe');
+                if (mailIframe) {
+                    mailIframe.style.cssText = 'position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; border: none !important;';
+                }
+                
+                // 處理純文字模式
+                const mailContentText = card.querySelector('#mailContentText');
+                if (mailContentText) {
+                    mailContentText.style.cssText = mailContentText.style.display === 'none' ? 'display: none;' : 'flex: 1 !important; min-height: 0 !important; overflow-y: auto !important;';
+                }
+                
                 card.classList.add('card-fullscreen');
                 overlay.style.display = 'block';
                 currentFullscreenCard = card;
                 
-                // 重繪圖表
+                // 重繪圖表和調整郵件內容高度
                 setTimeout(() => {
                     if (chart1) chart1.resize();
                     if (chart2) chart2.resize();
                     if (chart3) chart3.resize();
                     if (chart4) chart4.resize();
+                    // 調整郵件內容高度
+                    if (cardId === 'cardMailContent') {
+                        adjustMailContentHeight();
+                    }
                 }, 100);
             }
         }
@@ -2858,6 +2934,23 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         .chart-container {{ height: 280px; }}
         .chart-select {{ font-size: 0.75rem; padding: 3px 8px; width: 80px; }}
         
+        /* 分頁控制 */
+        .pagination-controls {{ display: flex; justify-content: space-between; align-items: center; padding: 8px 10px; background: #f8f9fa; border-top: 1px solid #dee2e6; font-size: 0.75rem; }}
+        .pagination-controls button {{ padding: 3px 10px; font-size: 0.75rem; }}
+        .pagination-controls select {{ font-size: 0.75rem; padding: 2px 5px; width: 70px; }}
+        
+        /* 最大化功能 */
+        .card-maximize-btn {{ cursor: pointer; opacity: 0.7; font-size: 0.8rem; }}
+        .card-maximize-btn:hover {{ opacity: 1; }}
+        .card-fullscreen {{ position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999; border-radius: 0 !important; margin: 0 !important; display: flex !important; flex-direction: column !important; }}
+        .card-fullscreen > .card-header {{ flex-shrink: 0 !important; }}
+        .card-fullscreen > .card-body, .card-fullscreen .card-body {{ flex: 1 !important; height: 0 !important; min-height: 0 !important; overflow: auto !important; display: flex !important; flex-direction: column !important; }}
+        .card-fullscreen .table-container {{ flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; }}
+        .card-fullscreen .chart-container {{ flex: 1 !important; min-height: 0 !important; }}
+        .card-fullscreen #mailContentHtml {{ flex: 1 !important; min-height: 0 !important; overflow: hidden !important; position: relative !important; }}
+        .card-fullscreen #mailIframe {{ position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }}
+        .fullscreen-overlay {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 9998; display: none; }}
+        
         /* 頁籤樣式 */
         #resultTabs .nav-link {{ color: #666; background: #f8f9fa; border: 1px solid #dee2e6; border-bottom: none; margin-right: 2px; font-weight: 600; }}
         #resultTabs .nav-link:hover {{ color: #2E75B6; background: #e8f4fc; }}
@@ -2874,6 +2967,9 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
     </style>
 </head>
 <body>
+    <!-- 全螢幕遮罩 -->
+    <div id="fullscreenOverlay" class="fullscreen-overlay" onclick="exitFullscreen()"></div>
+    
     <nav class="navbar navbar-dark mb-2 py-1 no-print">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h6"><i class="bi bi-clipboard-data me-2"></i>Task Report - {report_date}</span>
@@ -2928,23 +3024,29 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                 <!-- 圖表區 -->
                 <div class="row g-2 mb-2">
                     <div class="col-md-6">
-                        <div class="card">
+                        <div class="card" id="cardChart1">
                             <div class="card-header">
                                 <span class="card-header-title"><i class="bi bi-pie-chart me-1"></i>狀態分佈</span>
-                                <select class="form-select chart-select" id="chart1Type" onchange="updateChart1()">
-                                    <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option>
-                                </select>
+                                <div class="d-flex align-items-center">
+                                    <select class="form-select chart-select me-2" id="chart1Type" onchange="updateChart1()">
+                                        <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option>
+                                    </select>
+                                    <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart1')" title="最大化"></i>
+                                </div>
                             </div>
                             <div class="card-body py-2"><div class="chart-container"><canvas id="chart1"></canvas></div></div>
                         </div>
                     </div>
                     <div class="col-md-6">
-                        <div class="card">
+                        <div class="card" id="cardChart4">
                             <div class="card-header">
                                 <span class="card-header-title"><i class="bi bi-person-exclamation me-1"></i>成員超期天數</span>
-                                <select class="form-select chart-select" style="width:120px" id="chart4Type" onchange="updateChart4()">
-                                    <option value="stacked" selected>水平堆疊</option><option value="vstacked">垂直堆疊</option>
-                                </select>
+                                <div class="d-flex align-items-center">
+                                    <select class="form-select chart-select me-2" style="width:120px" id="chart4Type" onchange="updateChart4()">
+                                        <option value="stacked" selected>水平堆疊</option><option value="vstacked">垂直堆疊</option>
+                                    </select>
+                                    <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart4')" title="最大化"></i>
+                                </div>
                             </div>
                             <div class="card-body py-2"><div class="chart-container"><canvas id="chart4"></canvas></div></div>
                         </div>
@@ -2952,23 +3054,29 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                 </div>
                 <div class="row g-2 mb-2">
                     <div class="col-md-6">
-                        <div class="card">
+                        <div class="card" id="cardChart2">
                             <div class="card-header">
                                 <span class="card-header-title"><i class="bi bi-bar-chart me-1"></i>優先級分佈</span>
-                                <select class="form-select chart-select" id="chart2Type" onchange="updateChart2()">
-                                    <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option>
-                                </select>
+                                <div class="d-flex align-items-center">
+                                    <select class="form-select chart-select me-2" id="chart2Type" onchange="updateChart2()">
+                                        <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option>
+                                    </select>
+                                    <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart2')" title="最大化"></i>
+                                </div>
                             </div>
                             <div class="card-body py-2"><div class="chart-container"><canvas id="chart2"></canvas></div></div>
                         </div>
                     </div>
                     <div class="col-md-6">
-                        <div class="card">
+                        <div class="card" id="cardChart3">
                             <div class="card-header">
                                 <span class="card-header-title"><i class="bi bi-exclamation-triangle me-1"></i>超期狀況</span>
-                                <select class="form-select chart-select" id="chart3Type" onchange="updateChart3()">
-                                    <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option>
-                                </select>
+                                <div class="d-flex align-items-center">
+                                    <select class="form-select chart-select me-2" id="chart3Type" onchange="updateChart3()">
+                                        <option value="doughnut">環形</option><option value="pie">圓餅</option><option value="bar">長條</option>
+                                    </select>
+                                    <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardChart3')" title="最大化"></i>
+                                </div>
                             </div>
                             <div class="card-body py-2"><div class="chart-container"><canvas id="chart3"></canvas></div></div>
                         </div>
@@ -2976,13 +3084,29 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                 </div>
 
                 <!-- 任務列表 -->
-                <div class="card mb-2">
+                <div class="card mb-2" id="cardTaskList">
                     <div class="card-header">
                         <span class="card-header-title"><i class="bi bi-list-task me-1"></i>任務列表</span>
-                        <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('task')"><i class="bi bi-download me-1"></i>CSV</button>
+                        <div class="d-flex align-items-center">
+                            <button class="btn btn-outline-light btn-sm me-1" onclick="toggleTaskFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
+                            <button class="btn btn-outline-light btn-sm me-2" onclick="exportTableCSV('task')"><i class="bi bi-download me-1"></i>CSV</button>
+                            <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardTaskList')" title="最大化"></i>
+                        </div>
                     </div>
-                    <div class="table-toolbar">
-                        <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="taskSearch" onkeyup="filterTaskTable()">
+                    <div class="table-toolbar" id="taskFilterBar" style="display:none;">
+                        <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="taskSearch" onkeyup="filterAndRenderTaskTable()">
+                        <select class="form-select form-select-sm" style="width:130px" id="filterModule" onchange="filterAndRenderTaskTable()"><option value="">全部模組</option></select>
+                        <select class="form-select form-select-sm" style="width:130px" id="filterOwner" onchange="filterAndRenderTaskTable()"><option value="">全部負責人</option></select>
+                        <select class="form-select form-select-sm" style="width:110px" id="filterPriority" onchange="filterAndRenderTaskTable()">
+                            <option value="">全部優先</option><option value="high">High</option><option value="medium">Medium</option><option value="normal">Normal</option>
+                        </select>
+                        <select class="form-select form-select-sm" style="width:110px" id="filterStatus" onchange="filterAndRenderTaskTable()">
+                            <option value="">全部狀態</option><option value="in_progress">進行中</option><option value="pending">Pending</option><option value="completed">已完成</option>
+                        </select>
+                        <select class="form-select form-select-sm" style="width:110px" id="filterOverdue" onchange="filterAndRenderTaskTable()">
+                            <option value="">全部超期</option><option value="yes">超期</option><option value="no">未超期</option>
+                        </select>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="clearTaskFilters()"><i class="bi bi-x-circle"></i> 清除</button>
                     </div>
                     <div class="table-container">
                         <table class="table table-sm data-table mb-0">
@@ -3001,15 +3125,43 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                             <tbody id="taskTableBody"></tbody>
                         </table>
                     </div>
+                    <div class="pagination-controls">
+                        <div>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="prevPage('task')">上一頁</button>
+                            <select class="form-select form-select-sm d-inline-block ms-1" id="taskPageSize" onchange="renderTaskTable()">
+                                <option value="30">30</option><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option>
+                            </select>
+                        </div>
+                        <span id="taskPageInfo">-</span>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="nextPage('task')">下一頁</button>
+                    </div>
                 </div>
 
                 <!-- 成員統計 & 貢獻度 -->
                 <div class="row g-2">
                     <div class="col-md-7">
-                        <div class="card">
+                        <div class="card" id="cardMemberStats">
                             <div class="card-header">
                                 <span class="card-header-title"><i class="bi bi-people me-1"></i>成員統計</span>
-                                <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('member')"><i class="bi bi-download me-1"></i>CSV</button>
+                                <div class="d-flex align-items-center">
+                                    <button class="btn btn-outline-light btn-sm me-1" onclick="toggleMemberFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
+                                    <button class="btn btn-outline-light btn-sm me-2" onclick="exportTableCSV('member')"><i class="bi bi-download me-1"></i>CSV</button>
+                                    <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardMemberStats')" title="最大化"></i>
+                                </div>
+                            </div>
+                            <div class="table-toolbar" id="memberFilterBar" style="display:none;">
+                                <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="memberSearch" onkeyup="filterAndRenderMemberTable()">
+                                <select class="form-select form-select-sm" style="width:130px" id="filterMemberModule" onchange="filterAndRenderMemberTable()"><option value="">全部模組</option></select>
+                                <select class="form-select form-select-sm" style="width:110px" id="filterMemberPriority" onchange="filterAndRenderMemberTable()">
+                                    <option value="">全部優先</option><option value="high">High</option><option value="medium">Medium</option><option value="normal">Normal</option>
+                                </select>
+                                <select class="form-select form-select-sm" style="width:110px" id="filterMemberTaskStatus" onchange="filterAndRenderMemberTable()">
+                                    <option value="">全部狀態</option><option value="in_progress">進行中</option><option value="pending">Pending</option><option value="completed">已完成</option>
+                                </select>
+                                <select class="form-select form-select-sm" style="width:110px" id="filterMemberOverdue" onchange="filterAndRenderMemberTable()">
+                                    <option value="">全部超期</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
+                                </select>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="clearMemberFilters()"><i class="bi bi-x-circle"></i></button>
                             </div>
                             <div class="table-container" style="height:400px;">
                                 <table class="table table-sm data-table mb-0">
@@ -3031,10 +3183,22 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                         </div>
                     </div>
                     <div class="col-md-5">
-                        <div class="card">
+                        <div class="card" id="cardContrib">
                             <div class="card-header">
-                                <span class="card-header-title"><i class="bi bi-trophy me-1"></i>貢獻度</span>
-                                <button class="btn btn-outline-light btn-sm" onclick="exportTableCSV('contrib')"><i class="bi bi-download me-1"></i>CSV</button>
+                                <span class="card-header-title"><i class="bi bi-trophy me-1"></i>貢獻度 <small class="text-warning">(含超期減分)</small></span>
+                                <div class="d-flex align-items-center">
+                                    <button class="btn btn-outline-light btn-sm me-1" onclick="toggleContribFilter()"><i class="bi bi-funnel me-1"></i>篩選</button>
+                                    <button class="btn btn-outline-light btn-sm me-2" onclick="exportTableCSV('contrib')"><i class="bi bi-download me-1"></i>CSV</button>
+                                    <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardContrib')" title="最大化"></i>
+                                </div>
+                            </div>
+                            <div class="table-toolbar" id="contribFilterBar" style="display:none;">
+                                <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="contribSearch" onkeyup="filterAndRenderContribTable()">
+                                <select class="form-select form-select-sm" style="width:130px" id="filterContribModule" onchange="filterAndRenderContribTable()"><option value="">全部模組</option></select>
+                                <select class="form-select form-select-sm" style="width:110px" id="filterContribOverdue" onchange="filterAndRenderContribTable()">
+                                    <option value="">全部超期</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
+                                </select>
+                                <button class="btn btn-outline-secondary btn-sm" onclick="clearContribFilters()"><i class="bi bi-x-circle"></i></button>
                             </div>
                             <div class="table-container" style="height:400px;">
                                 <table class="table table-sm data-table mb-0">
@@ -3044,6 +3208,7 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                                             <th onclick="sortTable('contrib','name')">成員 ↕</th>
                                             <th onclick="sortTable('contrib','task_count')">任務 ↕</th>
                                             <th onclick="sortTable('contrib','base_score')">基礎分 ↕</th>
+                                            <th onclick="sortTable('contrib','overdue_count')">超期數 ↕</th>
                                             <th onclick="sortTable('contrib','overdue_penalty')">扣分 ↕</th>
                                             <th onclick="sortTable('contrib','score')">總分 ↕</th>
                                         </tr>
@@ -3156,14 +3321,33 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         
         const statusLabels = {{ completed: '已完成', pending: 'Pending', in_progress: '進行中' }};
         let chart1 = null, chart2 = null, chart3 = null, chart4 = null, currentModal = null, modalTasks = [];
+        let currentFullscreenCard = null;
         let mailViewMode = 'html';
         
         // 表格狀態
         let tableState = {{
-            task: {{ data: [], filtered: [], sortKey: 'last_seen', sortDir: -1 }},
+            task: {{ data: [], filtered: [], sortKey: 'last_seen', sortDir: -1, page: 0, pageSize: 50 }},
             member: {{ data: [], filtered: [], sortKey: 'total', sortDir: -1 }},
             contrib: {{ data: [], filtered: [], sortKey: 'rank', sortDir: 1 }}
         }};
+        
+        // 填充篩選選項
+        function fillFilterOptions() {{
+            const modules = [...new Set(resultData.all_tasks.map(t => t.module).filter(m => m))].sort();
+            const owners = [...new Set(resultData.all_tasks.flatMap(t => t.owners || []).filter(o => o))].sort();
+            
+            const filterModule = document.getElementById('filterModule');
+            const filterOwner = document.getElementById('filterOwner');
+            const filterMemberModule = document.getElementById('filterMemberModule');
+            const filterContribModule = document.getElementById('filterContribModule');
+            
+            const moduleOptions = '<option value="">全部模組</option>' + modules.map(m => `<option value="${{m}}">${{m}}</option>`).join('');
+            
+            if (filterModule) filterModule.innerHTML = moduleOptions;
+            if (filterOwner) filterOwner.innerHTML = '<option value="">全部負責人</option>' + owners.map(o => `<option value="${{o}}">${{o}}</option>`).join('');
+            if (filterMemberModule) filterMemberModule.innerHTML = moduleOptions;
+            if (filterContribModule) filterContribModule.innerHTML = moduleOptions;
+        }}
         
         // 初始化
         function updateUI() {{
@@ -3192,6 +3376,7 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
             tableState.contrib.data = resultData.contribution || [];
             tableState.contrib.filtered = [...tableState.contrib.data];
             
+            fillFilterOptions();
             renderTaskTable();
             renderMemberTable();
             renderContribTable();
@@ -3232,7 +3417,12 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         }}
         
         function renderTaskTable() {{
-            document.getElementById('taskTableBody').innerHTML = tableState.task.filtered.map(t => `
+            const state = tableState.task;
+            state.pageSize = parseInt(document.getElementById('taskPageSize')?.value || 50);
+            const start = state.page * state.pageSize;
+            const pageData = state.filtered.slice(start, start + state.pageSize);
+            
+            document.getElementById('taskTableBody').innerHTML = pageData.map(t => `
                 <tr class="row-${{t.task_status}} ${{t.overdue_days > 0 ? 'row-overdue' : ''}}">
                     <td>${{t.last_seen || '-'}}</td>
                     <td><span class="badge bg-secondary" style="font-size:0.65rem">${{t.module || '-'}}</span></td>
@@ -3248,19 +3438,23 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                     <td><span class="badge badge-${{t.task_status}}">${{statusLabels[t.task_status]}}</span></td>
                 </tr>
             `).join('');
+            
+            const totalPages = Math.ceil(state.filtered.length / state.pageSize) || 1;
+            const pageInfoEl = document.getElementById('taskPageInfo');
+            if (pageInfoEl) pageInfoEl.textContent = `第 ${{state.page + 1}}/${{totalPages}} 頁 (共 ${{state.filtered.length}} 筆)`;
         }}
         
         function renderMemberTable() {{
             document.getElementById('memberTableBody').innerHTML = tableState.member.filtered.map(m => `
                 <tr>
                     <td><strong style="cursor:pointer" onclick="showMemberTasks('${{esc(m.name)}}')">${{m.name}}</strong></td>
-                    <td>${{m.total}}</td>
-                    <td><span class="badge badge-completed">${{m.completed}}</span></td>
-                    <td><span class="badge badge-in_progress">${{m.in_progress}}</span></td>
-                    <td><span class="badge badge-pending">${{m.pending}}</span></td>
-                    <td><span class="badge badge-high">${{m.high}}</span></td>
-                    <td><span class="badge badge-medium">${{m.medium}}</span></td>
-                    <td><span class="badge badge-normal">${{m.normal}}</span></td>
+                    <td style="cursor:pointer" onclick="showMemberTasks('${{esc(m.name)}}')">${{m.total}}</td>
+                    <td style="cursor:pointer" onclick="showMemberTasksByStatus('${{esc(m.name)}}', 'completed')"><span class="badge badge-completed">${{m.completed}}</span></td>
+                    <td style="cursor:pointer" onclick="showMemberTasksByStatus('${{esc(m.name)}}', 'in_progress')"><span class="badge badge-in_progress">${{m.in_progress}}</span></td>
+                    <td style="cursor:pointer" onclick="showMemberTasksByStatus('${{esc(m.name)}}', 'pending')"><span class="badge badge-pending">${{m.pending}}</span></td>
+                    <td style="cursor:pointer" onclick="showMemberTasksByPriority('${{esc(m.name)}}', 'high')"><span class="badge badge-high">${{m.high}}</span></td>
+                    <td style="cursor:pointer" onclick="showMemberTasksByPriority('${{esc(m.name)}}', 'medium')"><span class="badge badge-medium">${{m.medium}}</span></td>
+                    <td style="cursor:pointer" onclick="showMemberTasksByPriority('${{esc(m.name)}}', 'normal')"><span class="badge badge-normal">${{m.normal}}</span></td>
                 </tr>
             `).join('');
         }}
@@ -3269,11 +3463,12 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
             document.getElementById('contribTableBody').innerHTML = tableState.contrib.filtered.map(c => `
                 <tr>
                     <td><span class="rank-badge ${{c.rank <= 3 ? 'rank-' + c.rank : 'rank-other'}}">${{c.rank}}</span></td>
-                    <td><strong style="cursor:pointer" onclick="showContribDetail('${{esc(c.name)}}')">${{c.name}}</strong></td>
-                    <td>${{c.task_count}}</td>
-                    <td>${{c.base_score}}</td>
-                    <td class="text-danger">${{c.overdue_penalty > 0 ? '-' + c.overdue_penalty : '-'}}</td>
-                    <td class="fw-bold text-success">${{c.score}}</td>
+                    <td style="cursor:pointer" onclick="showMemberTasks('${{esc(c.name)}}')">${{c.name}}</td>
+                    <td style="cursor:pointer" onclick="showMemberTasks('${{esc(c.name)}}')">${{c.task_count}}</td>
+                    <td style="cursor:pointer" onclick="showContribDetail('${{esc(c.name)}}')">${{c.base_score}}</td>
+                    <td class="${{c.overdue_count > 0 ? 'text-overdue' : ''}}" style="cursor:pointer" onclick="showMemberOverdueTasks('${{esc(c.name)}}')">${{c.overdue_count || 0}}</td>
+                    <td class="${{c.overdue_penalty > 0 ? 'text-overdue' : ''}}" style="cursor:pointer" onclick="showContribDetail('${{esc(c.name)}}')">-${{c.overdue_penalty}}</td>
+                    <td style="cursor:pointer" onclick="showContribDetail('${{esc(c.name)}}')"><strong>${{c.score}}</strong></td>
                 </tr>
             `).join('');
         }}
@@ -3435,7 +3630,45 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         function showOverdue() {{ const tasks = resultData.all_tasks.filter(t => t.overdue_days > 0 && t.task_status !== 'completed'); showModal(`超期任務 (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
         function showTaskDetail(title) {{ const tasks = resultData.all_tasks.filter(t => t.title === title); showModal(`任務: ${{title}}`, modalTableWithFilters(tasks)); }}
         function showMemberTasks(name) {{ const tasks = resultData.all_tasks.filter(t => t.owners_str.includes(name)); showModal(`${{name}} 的任務 (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
-        function showContribDetail(name) {{ const c = tableState.contrib.filtered.find(x => x.name === name) || resultData.contribution.find(x => x.name === name); if (!c) return; showModal(`${{name}} 貢獻度明細`, `<div class="p-3"><table class="table table-sm data-table"><tbody><tr><td>任務數</td><td>${{c.task_count}}</td></tr><tr><td>基礎分</td><td>${{c.base_score}}</td></tr><tr><td>超期扣分</td><td class="text-danger">-${{c.overdue_penalty}}</td></tr><tr class="table-success"><td class="fw-bold">總分</td><td class="fw-bold">${{c.score}}</td></tr></tbody></table></div>`); }}
+        function showMemberTasksByStatus(name, status) {{ const tasks = resultData.all_tasks.filter(t => t.owners_str.includes(name) && t.task_status === status); showModal(`${{name}} - ${{statusLabels[status]}} (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
+        function showMemberTasksByPriority(name, priority) {{ const tasks = resultData.all_tasks.filter(t => t.owners_str.includes(name) && t.priority === priority); showModal(`${{name}} - ${{priority.toUpperCase()}} (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
+        function showContribDetail(name) {{ 
+            const c = tableState.contrib.filtered.find(x => x.name === name) || resultData.contribution.find(x => x.name === name); 
+            if (!c) return; 
+            const detail = `
+                <div class="p-3">
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-person-circle fs-2 text-primary me-2"></i>
+                        <h5 class="mb-0">${{name}} 貢獻度計算明細</h5>
+                    </div>
+                    <table class="table table-sm data-table mb-0">
+                        <tbody>
+                            <tr><td class="fw-bold" style="width:50%">任務數</td><td>${{c.task_count}}</td></tr>
+                            <tr><td>High 任務 × 3</td><td><span class="badge badge-high me-1">${{c.high}}</span>× 3 = ${{c.high * 3}}</td></tr>
+                            <tr><td>Medium 任務 × 2</td><td><span class="badge badge-medium me-1">${{c.medium}}</span>× 2 = ${{c.medium * 2}}</td></tr>
+                            <tr><td>Normal 任務 × 1</td><td><span class="badge badge-normal me-1">${{c.normal}}</span>× 1 = ${{c.normal}}</td></tr>
+                            <tr class="table-active"><td class="fw-bold">基礎分</td><td class="fw-bold">${{c.base_score}}</td></tr>
+                        </tbody>
+                    </table>
+                    <table class="table table-sm data-table mt-2 mb-0">
+                        <tbody>
+                            <tr class="row-overdue"><td style="width:50%">超期任務數</td><td>${{c.overdue_count}}</td></tr>
+                            <tr class="row-overdue"><td>總超期天數</td><td>${{c.overdue_days}}</td></tr>
+                            <tr class="row-overdue"><td class="fw-bold">扣分 (天數 × 0.1 × -1)</td><td class="fw-bold text-danger">-${{c.overdue_penalty}}</td></tr>
+                        </tbody>
+                    </table>
+                    <table class="table table-sm data-table mt-2 mb-0">
+                        <tbody>
+                            <tr style="background:#d4edda"><td style="width:50%" class="fw-bold fs-5">總分</td><td class="fw-bold fs-5 text-success">${{c.score}}</td></tr>
+                        </tbody>
+                    </table>
+                    <div class="text-muted small mt-3">
+                        <i class="bi bi-info-circle me-1"></i>計算公式: 總分 = 基礎分 - 扣分 = ${{c.base_score}} - ${{c.overdue_penalty}} = ${{c.score}}
+                    </div>
+                </div>
+            `;
+            showModal(`${{name}} 貢獻度明細`, detail);
+        }}
         function showByPriority(priority) {{ const tasks = resultData.all_tasks.filter(t => t.priority === priority); showModal(`${{priority.toUpperCase()}} 優先級 (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
         function showNotOverdue() {{ const tasks = resultData.all_tasks.filter(t => t.overdue_days <= 0 && t.task_status !== 'completed'); showModal(`未超期任務 (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
         function showMemberOverdueTasks(name) {{ const tasks = resultData.all_tasks.filter(t => t.owners_str.includes(name) && t.overdue_days > 0); showModal(`${{name}} 超期任務 (${{tasks.length}})`, modalTableWithFilters(tasks)); }}
@@ -3596,6 +3829,262 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                     ]}},
                     options: {{ maintainAspectRatio: false, indexAxis: 'y', plugins: {{ legend: {{ display: true }} }}, scales: {{ x: {{ stacked: true, beginAtZero: true }}, y: {{ stacked: true }} }}, onClick: (e, el) => {{ if (el.length) showMemberOverdueTasks(labels[el[0].index]); }} }}
                 }});
+            }}
+        }}
+        
+        // 分頁控制
+        function prevPage(table) {{ if (tableState[table].page > 0) {{ tableState[table].page--; if (table === 'task') renderTaskTable(); }} }}
+        function nextPage(table) {{ 
+            const state = tableState[table];
+            const totalPages = Math.ceil(state.filtered.length / state.pageSize);
+            if (state.page < totalPages - 1) {{ state.page++; if (table === 'task') renderTaskTable(); }}
+        }}
+        
+        // 篩選切換
+        function toggleTaskFilter() {{ const bar = document.getElementById('taskFilterBar'); bar.style.display = bar.style.display === 'none' ? 'flex' : 'none'; }}
+        function toggleMemberFilter() {{ const bar = document.getElementById('memberFilterBar'); bar.style.display = bar.style.display === 'none' ? 'flex' : 'none'; }}
+        function toggleContribFilter() {{ const bar = document.getElementById('contribFilterBar'); bar.style.display = bar.style.display === 'none' ? 'flex' : 'none'; }}
+        
+        // 清除篩選
+        function clearTaskFilters() {{
+            document.getElementById('taskSearch').value = '';
+            document.getElementById('filterModule').value = '';
+            document.getElementById('filterOwner').value = '';
+            document.getElementById('filterPriority').value = '';
+            document.getElementById('filterStatus').value = '';
+            document.getElementById('filterOverdue').value = '';
+            filterAndRenderTaskTable();
+        }}
+        
+        // 任務表格篩選
+        function filterAndRenderTaskTable() {{
+            const search = (document.getElementById('taskSearch')?.value || '').toLowerCase();
+            const module = document.getElementById('filterModule')?.value || '';
+            const owner = document.getElementById('filterOwner')?.value || '';
+            const priority = document.getElementById('filterPriority')?.value || '';
+            const status = document.getElementById('filterStatus')?.value || '';
+            const overdue = document.getElementById('filterOverdue')?.value || '';
+            
+            tableState.task.filtered = tableState.task.data.filter(t => {{
+                if (search && !JSON.stringify(t).toLowerCase().includes(search)) return false;
+                if (module && t.module !== module) return false;
+                if (owner && !(t.owners || []).includes(owner)) return false;
+                if (priority && t.priority !== priority) return false;
+                if (status && t.task_status !== status) return false;
+                if (overdue === 'yes' && t.overdue_days <= 0) return false;
+                if (overdue === 'no' && t.overdue_days > 0) return false;
+                return true;
+            }});
+            tableState.task.page = 0;
+            renderTaskTable();
+        }}
+        
+        // 成員表格篩選
+        function filterAndRenderMemberTable() {{
+            const search = (document.getElementById('memberSearch')?.value || '').toLowerCase();
+            const module = document.getElementById('filterMemberModule')?.value || '';
+            const priority = document.getElementById('filterMemberPriority')?.value || '';
+            const status = document.getElementById('filterMemberTaskStatus')?.value || '';
+            const overdue = document.getElementById('filterMemberOverdue')?.value || '';
+            
+            // 根據篩選條件重新計算成員統計
+            const filteredTasks = resultData.all_tasks.filter(t => {{
+                if (module && t.module !== module) return false;
+                if (priority && t.priority !== priority) return false;
+                if (status && t.task_status !== status) return false;
+                if (overdue === 'hasOverdue' && t.overdue_days <= 0) return false;
+                if (overdue === 'noOverdue' && t.overdue_days > 0) return false;
+                return true;
+            }});
+            
+            // 重新計算成員統計
+            const memberMap = {{}};
+            filteredTasks.forEach(t => {{
+                (t.owners || []).forEach(name => {{
+                    if (!memberMap[name]) memberMap[name] = {{ name, total: 0, completed: 0, in_progress: 0, pending: 0, high: 0, medium: 0, normal: 0 }};
+                    memberMap[name].total++;
+                    memberMap[name][t.task_status]++;
+                    memberMap[name][t.priority]++;
+                }});
+            }});
+            
+            tableState.member.data = Object.values(memberMap);
+            tableState.member.filtered = tableState.member.data.filter(m => !search || m.name.toLowerCase().includes(search));
+            renderMemberTable();
+        }}
+        
+        // 貢獻度表格篩選
+        function filterAndRenderContribTable() {{
+            const search = (document.getElementById('contribSearch')?.value || '').toLowerCase();
+            const module = document.getElementById('filterContribModule')?.value || '';
+            const overdue = document.getElementById('filterContribOverdue')?.value || '';
+            
+            // 根據篩選條件重新計算貢獻度
+            const filteredTasks = resultData.all_tasks.filter(t => {{
+                if (module && t.module !== module) return false;
+                return true;
+            }});
+            
+            // 重新計算貢獻度
+            const contribMap = {{}};
+            filteredTasks.forEach(t => {{
+                (t.owners || []).forEach(name => {{
+                    if (!contribMap[name]) contribMap[name] = {{ name, task_count: 0, high: 0, medium: 0, normal: 0, overdue_count: 0, overdue_days: 0 }};
+                    contribMap[name].task_count++;
+                    contribMap[name][t.priority]++;
+                    if (t.overdue_days > 0) {{
+                        contribMap[name].overdue_count++;
+                        contribMap[name].overdue_days += t.overdue_days;
+                    }}
+                }});
+            }});
+            
+            // 計算分數
+            let contribList = Object.values(contribMap).map(c => {{
+                c.base_score = c.high * 3 + c.medium * 2 + c.normal * 1;
+                c.overdue_penalty = Math.round(c.overdue_days * 0.1 * 10) / 10;
+                c.score = Math.round((c.base_score - c.overdue_penalty) * 10) / 10;
+                return c;
+            }});
+            
+            // 篩選超期
+            if (overdue === 'hasOverdue') contribList = contribList.filter(c => c.overdue_count > 0);
+            if (overdue === 'noOverdue') contribList = contribList.filter(c => c.overdue_count === 0);
+            
+            // 排序和排名
+            contribList.sort((a, b) => b.score - a.score);
+            contribList.forEach((c, i) => c.rank = i + 1);
+            
+            tableState.contrib.data = contribList;
+            tableState.contrib.filtered = contribList.filter(c => !search || c.name.toLowerCase().includes(search));
+            renderContribTable();
+        }}
+        
+        function clearMemberFilters() {{ 
+            document.getElementById('memberSearch').value = ''; 
+            const filterMemberModule = document.getElementById('filterMemberModule');
+            if (filterMemberModule) filterMemberModule.value = '';
+            const filterMemberPriority = document.getElementById('filterMemberPriority');
+            if (filterMemberPriority) filterMemberPriority.value = '';
+            const filterMemberTaskStatus = document.getElementById('filterMemberTaskStatus');
+            if (filterMemberTaskStatus) filterMemberTaskStatus.value = '';
+            const filterMemberOverdue = document.getElementById('filterMemberOverdue');
+            if (filterMemberOverdue) filterMemberOverdue.value = '';
+            // 還原原始資料
+            tableState.member.data = resultData.members || [];
+            tableState.member.filtered = [...tableState.member.data];
+            renderMemberTable(); 
+        }}
+        function clearContribFilters() {{ 
+            document.getElementById('contribSearch').value = ''; 
+            const filterContribModule = document.getElementById('filterContribModule');
+            if (filterContribModule) filterContribModule.value = '';
+            const filterContribOverdue = document.getElementById('filterContribOverdue');
+            if (filterContribOverdue) filterContribOverdue.value = '';
+            // 還原原始資料
+            tableState.contrib.data = resultData.contribution || [];
+            tableState.contrib.filtered = [...tableState.contrib.data];
+            renderContribTable(); 
+        }}
+        
+        // 最大化功能
+        function toggleFullscreen(cardId) {{
+            const card = document.getElementById(cardId);
+            const overlay = document.getElementById('fullscreenOverlay');
+            
+            if (card.classList.contains('card-fullscreen')) {{
+                // 還原
+                card.classList.remove('card-fullscreen');
+                overlay.style.display = 'none';
+                currentFullscreenCard = null;
+                
+                // 還原卡片高度
+                if (card._originalHeight) {{
+                    card.style.height = card._originalHeight;
+                }} else {{
+                    card.style.height = '';
+                }}
+                
+                // 還原 card-body 樣式
+                const cardBody = card.querySelector('.card-body');
+                if (cardBody) {{
+                    if (cardBody._originalStyle) {{
+                        cardBody.style.cssText = cardBody._originalStyle;
+                    }} else {{
+                        cardBody.style.cssText = '';
+                    }}
+                }}
+                
+                // 還原 chart-container
+                const chartContainer = card.querySelector('.chart-container');
+                if (chartContainer) {{
+                    chartContainer.style.cssText = '';
+                }}
+                
+                // 延遲重繪圖表
+                setTimeout(() => {{
+                    if (chart1) chart1.resize();
+                    if (chart2) chart2.resize();
+                    if (chart3) chart3.resize();
+                    if (chart4) chart4.resize();
+                }}, 50);
+            }} else {{
+                // 最大化
+                if (currentFullscreenCard) {{
+                    // 先還原之前最大化的卡片
+                    currentFullscreenCard.classList.remove('card-fullscreen');
+                    if (currentFullscreenCard._originalHeight) {{
+                        currentFullscreenCard.style.height = currentFullscreenCard._originalHeight;
+                    }} else {{
+                        currentFullscreenCard.style.height = '';
+                    }}
+                    const prevCardBody = currentFullscreenCard.querySelector('.card-body');
+                    if (prevCardBody && prevCardBody._originalStyle) {{
+                        prevCardBody.style.cssText = prevCardBody._originalStyle;
+                    }} else if (prevCardBody) {{
+                        prevCardBody.style.cssText = '';
+                    }}
+                }}
+                
+                // 儲存原始狀態
+                card._originalHeight = card.style.height || '';
+                card.style.height = '100vh';
+                
+                const cardBody = card.querySelector('.card-body');
+                if (cardBody) {{
+                    cardBody._originalStyle = cardBody.style.cssText || '';
+                    cardBody.style.cssText = 'flex: 1 !important; height: 0 !important; min-height: 0 !important; display: flex !important; flex-direction: column !important; overflow: hidden !important;';
+                }}
+                
+                // 圖表容器
+                const chartContainer = card.querySelector('.chart-container');
+                if (chartContainer) {{
+                    chartContainer.style.cssText = 'flex: 1 !important; min-height: 0 !important;';
+                }}
+                
+                card.classList.add('card-fullscreen');
+                overlay.style.display = 'block';
+                currentFullscreenCard = card;
+                
+                setTimeout(() => {{
+                    if (chart1) chart1.resize();
+                    if (chart2) chart2.resize();
+                    if (chart3) chart3.resize();
+                    if (chart4) chart4.resize();
+                }}, 100);
+            }}
+        }}
+        
+        function exitFullscreen() {{
+            if (currentFullscreenCard) {{
+                currentFullscreenCard.classList.remove('card-fullscreen');
+                document.getElementById('fullscreenOverlay').style.display = 'none';
+                if (currentFullscreenCard._originalHeight) currentFullscreenCard.style.height = currentFullscreenCard._originalHeight;
+                currentFullscreenCard = null;
+                if (chart1) chart1.resize();
+                if (chart2) chart2.resize();
+                if (chart3) chart3.resize();
+                if (chart4) chart4.resize();
             }}
         }}
         
