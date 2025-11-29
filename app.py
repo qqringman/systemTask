@@ -1221,6 +1221,12 @@ HTML = '''
                         <div class="table-toolbar" id="contribFilterBar" style="display:none;">
                             <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="contribSearch" onkeyup="filterAndRenderContribTable()">
                             <select class="form-select form-select-sm" style="width:130px" id="filterContribModule" onchange="filterAndRenderContribTable()"><option value="">全部模組</option></select>
+                            <select class="form-select form-select-sm" style="width:110px" id="filterContribPriority" onchange="filterAndRenderContribTable()">
+                                <option value="">全部優先</option><option value="high">High</option><option value="medium">Medium</option><option value="normal">Normal</option>
+                            </select>
+                            <select class="form-select form-select-sm" style="width:110px" id="filterContribTaskStatus" onchange="filterAndRenderContribTable()">
+                                <option value="">全部狀態</option><option value="in_progress">進行中</option><option value="pending">Pending</option><option value="completed">已完成</option>
+                            </select>
                             <select class="form-select form-select-sm" style="width:110px" id="filterContribOverdue" onchange="filterAndRenderContribTable()">
                                 <option value="">全部超期</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
                             </select>
@@ -1451,6 +1457,8 @@ HTML = '''
         function clearContribFilters() {
             document.getElementById('contribSearch').value = '';
             document.getElementById('filterContribModule').value = '';
+            document.getElementById('filterContribPriority').value = '';
+            document.getElementById('filterContribTaskStatus').value = '';
             document.getElementById('filterContribOverdue').value = '';
             filterAndRenderContribTable();
         }
@@ -1898,15 +1906,24 @@ HTML = '''
         function filterAndRenderContribTable() {
             const search = (document.getElementById('contribSearch')?.value || '').toLowerCase();
             const module = document.getElementById('filterContribModule')?.value || '';
+            const priorityFilter = document.getElementById('filterContribPriority')?.value || '';
+            const statusFilter = document.getElementById('filterContribTaskStatus')?.value || '';
             const overdueFilter = document.getElementById('filterContribOverdue')?.value || '';
             
-            // 根據篩選條件重新計算貢獻度
-            let filteredTasks = resultData.all_tasks;
-            if (module) filteredTasks = filteredTasks.filter(t => (t.module || '') === module);
+            // 先根據模組和優先級篩選所有任務（用於計算任務數，包含 pending）
+            let allFilteredTasks = resultData.all_tasks;
+            if (module) allFilteredTasks = allFilteredTasks.filter(t => (t.module || '') === module);
+            if (priorityFilter) allFilteredTasks = allFilteredTasks.filter(t => t.priority === priorityFilter);
+            if (statusFilter) allFilteredTasks = allFilteredTasks.filter(t => t.task_status === statusFilter);
+            
+            // 用於計算分數的任務（排除 pending）
+            let scoringTasks = allFilteredTasks.filter(t => t.task_status !== 'pending');
             
             // 重新計算貢獻度
             const contribStats = {};
-            filteredTasks.forEach(t => {
+            
+            // 先計算任務數（包含 pending）
+            allFilteredTasks.forEach(t => {
                 (t.owners || t.owners_str?.split('/') || []).forEach(owner => {
                     if (!contribStats[owner]) {
                         contribStats[owner] = { 
@@ -1915,6 +1932,18 @@ HTML = '''
                         };
                     }
                     contribStats[owner].task_count++;
+                });
+            });
+            
+            // 再計算分數（排除 pending）
+            scoringTasks.forEach(t => {
+                (t.owners || t.owners_str?.split('/') || []).forEach(owner => {
+                    if (!contribStats[owner]) {
+                        contribStats[owner] = { 
+                            name: owner, task_count: 0, high: 0, medium: 0, normal: 0,
+                            base_score: 0, overdue_count: 0, overdue_days: 0, overdue_penalty: 0, score: 0
+                        };
+                    }
                     contribStats[owner][t.priority] = (contribStats[owner][t.priority] || 0) + 1;
                     if (t.overdue_days > 0 && t.task_status !== 'completed') {
                         contribStats[owner].overdue_count++;
@@ -3197,6 +3226,12 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                             <div class="table-toolbar" id="contribFilterBar" style="display:none;">
                                 <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="contribSearch" onkeyup="filterAndRenderContribTable()">
                                 <select class="form-select form-select-sm" style="width:130px" id="filterContribModule" onchange="filterAndRenderContribTable()"><option value="">全部模組</option></select>
+                                <select class="form-select form-select-sm" style="width:110px" id="filterContribPriority" onchange="filterAndRenderContribTable()">
+                                    <option value="">全部優先</option><option value="high">High</option><option value="medium">Medium</option><option value="normal">Normal</option>
+                                </select>
+                                <select class="form-select form-select-sm" style="width:110px" id="filterContribTaskStatus" onchange="filterAndRenderContribTable()">
+                                    <option value="">全部狀態</option><option value="in_progress">進行中</option><option value="pending">Pending</option><option value="completed">已完成</option>
+                                </select>
                                 <select class="form-select form-select-sm" style="width:110px" id="filterContribOverdue" onchange="filterAndRenderContribTable()">
                                     <option value="">全部超期</option><option value="hasOverdue">有超期</option><option value="noOverdue">無超期</option>
                                 </select>
@@ -3263,7 +3298,7 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         </div>
     </div>
     
-    <div class="footer">© 2025 Task Dashboard | Exported at {report_date}</div>
+    <div class="footer">© 2025 Task Dashboard v23 | Powered by Vince</div>
 
     <!-- Modal -->
     <div class="modal fade" id="detailModal" tabindex="-1">
@@ -3585,10 +3620,37 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         
         function modalTableWithFilters(tasks) {{
             modalTasks = tasks;
+            // 取得唯一值
+            const modules = [...new Set(tasks.map(t => t.module || '未分類'))].sort();
+            const owners = [...new Set(tasks.flatMap(t => t.owners || []))].sort();
+            const priorities = ['high', 'medium', 'normal'];
+            const statuses = ['in_progress', 'pending', 'completed'];
+            
             return `
-                <div class="d-flex gap-2 mb-2">
+                <div class="d-flex flex-wrap gap-2 mb-2 align-items-center">
                     <input type="text" class="form-control form-control-sm" style="width:150px" placeholder="🔍 搜尋..." id="modal_search" onkeyup="filterModalTasks()">
-                    <span id="modal_count">共 ${{tasks.length}} 筆</span>
+                    <select class="form-select form-select-sm" style="width:130px" id="modal_module" onchange="filterModalTasks()">
+                        <option value="">全部模組</option>
+                        ${{modules.map(m => `<option value="${{m}}">${{m}}</option>`).join('')}}
+                    </select>
+                    <select class="form-select form-select-sm" style="width:130px" id="modal_owner" onchange="filterModalTasks()">
+                        <option value="">全部負責人</option>
+                        ${{owners.map(o => `<option value="${{o}}">${{o}}</option>`).join('')}}
+                    </select>
+                    <select class="form-select form-select-sm" style="width:110px" id="modal_priority" onchange="filterModalTasks()">
+                        <option value="">全部優先</option>
+                        ${{priorities.map(p => `<option value="${{p}}">${{p}}</option>`).join('')}}
+                    </select>
+                    <select class="form-select form-select-sm" style="width:110px" id="modal_status" onchange="filterModalTasks()">
+                        <option value="">全部狀態</option>
+                        ${{statuses.map(s => `<option value="${{s}}">${{statusLabels[s]}}</option>`).join('')}}
+                    </select>
+                    <select class="form-select form-select-sm" style="width:110px" id="modal_overdue" onchange="filterModalTasks()">
+                        <option value="">全部超期</option>
+                        <option value="yes">超期</option>
+                        <option value="no">未超期</option>
+                    </select>
+                    <span id="modal_count" class="small text-muted">共 ${{tasks.length}} 筆</span>
                 </div>
                 <div style="max-height:50vh;overflow-y:auto;">
                     <table class="table table-sm data-table">
@@ -3611,7 +3673,23 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         
         function filterModalTasks() {{
             const search = (document.getElementById('modal_search')?.value || '').toLowerCase();
-            const filtered = modalTasks.filter(t => !search || JSON.stringify(t).toLowerCase().includes(search));
+            const module = document.getElementById('modal_module')?.value || '';
+            const owner = document.getElementById('modal_owner')?.value || '';
+            const priority = document.getElementById('modal_priority')?.value || '';
+            const status = document.getElementById('modal_status')?.value || '';
+            const overdue = document.getElementById('modal_overdue')?.value || '';
+            
+            const filtered = modalTasks.filter(t => {{
+                if (search && !JSON.stringify(t).toLowerCase().includes(search)) return false;
+                if (module && (t.module || '未分類') !== module) return false;
+                if (owner && !(t.owners || []).includes(owner) && !t.owners_str?.includes(owner)) return false;
+                if (priority && t.priority !== priority) return false;
+                if (status && t.task_status !== status) return false;
+                if (overdue === 'yes' && t.overdue_days <= 0) return false;
+                if (overdue === 'no' && t.overdue_days > 0) return false;
+                return true;
+            }});
+            
             document.getElementById('modal_count').textContent = `共 ${{filtered.length}} 筆`;
             document.getElementById('modalTableBody').innerHTML = filtered.map(t => `
                 <tr class="row-${{t.task_status}} ${{t.overdue_days > 0 ? 'row-overdue' : ''}}">
@@ -3919,22 +3997,38 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         function filterAndRenderContribTable() {{
             const search = (document.getElementById('contribSearch')?.value || '').toLowerCase();
             const module = document.getElementById('filterContribModule')?.value || '';
+            const priority = document.getElementById('filterContribPriority')?.value || '';
+            const status = document.getElementById('filterContribTaskStatus')?.value || '';
             const overdue = document.getElementById('filterContribOverdue')?.value || '';
             
-            // 根據篩選條件重新計算貢獻度
-            const filteredTasks = resultData.all_tasks.filter(t => {{
+            // 先根據模組和優先級篩選所有任務（用於計算任務數，包含 pending）
+            let allFilteredTasks = resultData.all_tasks.filter(t => {{
                 if (module && t.module !== module) return false;
+                if (priority && t.priority !== priority) return false;
+                if (status && t.task_status !== status) return false;
                 return true;
             }});
             
+            // 用於計算分數的任務（排除 pending）
+            let scoringTasks = allFilteredTasks.filter(t => t.task_status !== 'pending');
+            
             // 重新計算貢獻度
             const contribMap = {{}};
-            filteredTasks.forEach(t => {{
+            
+            // 先計算任務數（包含 pending）
+            allFilteredTasks.forEach(t => {{
                 (t.owners || []).forEach(name => {{
                     if (!contribMap[name]) contribMap[name] = {{ name, task_count: 0, high: 0, medium: 0, normal: 0, overdue_count: 0, overdue_days: 0 }};
                     contribMap[name].task_count++;
+                }});
+            }});
+            
+            // 再計算分數（排除 pending）
+            scoringTasks.forEach(t => {{
+                (t.owners || []).forEach(name => {{
+                    if (!contribMap[name]) contribMap[name] = {{ name, task_count: 0, high: 0, medium: 0, normal: 0, overdue_count: 0, overdue_days: 0 }};
                     contribMap[name][t.priority]++;
-                    if (t.overdue_days > 0) {{
+                    if (t.overdue_days > 0 && t.task_status !== 'completed') {{
                         contribMap[name].overdue_count++;
                         contribMap[name].overdue_days += t.overdue_days;
                     }}
@@ -3981,12 +4075,13 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
             document.getElementById('contribSearch').value = ''; 
             const filterContribModule = document.getElementById('filterContribModule');
             if (filterContribModule) filterContribModule.value = '';
+            const filterContribPriority = document.getElementById('filterContribPriority');
+            if (filterContribPriority) filterContribPriority.value = '';
+            const filterContribTaskStatus = document.getElementById('filterContribTaskStatus');
+            if (filterContribTaskStatus) filterContribTaskStatus.value = '';
             const filterContribOverdue = document.getElementById('filterContribOverdue');
             if (filterContribOverdue) filterContribOverdue.value = '';
-            // 還原原始資料
-            tableState.contrib.data = resultData.contribution || [];
-            tableState.contrib.filtered = [...tableState.contrib.data];
-            renderContribTable(); 
+            filterAndRenderContribTable(); 
         }}
         
         // 最大化功能
