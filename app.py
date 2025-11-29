@@ -708,7 +708,7 @@ HTML = '''
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>System Task Dashboard v23</title>
+    <title>System Task Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -821,7 +821,7 @@ HTML = '''
     
     <nav class="navbar navbar-dark mb-2 py-1">
         <div class="container-fluid">
-            <span class="navbar-brand mb-0 h6"><i class="bi bi-clipboard-data me-2"></i>System Task Dashboard v23</span>
+            <span class="navbar-brand mb-0 h6"><i class="bi bi-clipboard-data me-2"></i>System Task Dashboard</span>
             <div class="d-flex gap-2">
                 <button class="btn btn-outline-light btn-sm" onclick="exportExcel()"><i class="bi bi-file-excel me-1"></i>Excel</button>
                 <button class="btn btn-outline-light btn-sm" onclick="exportHTML()"><i class="bi bi-filetype-html me-1"></i>HTML</button>
@@ -1249,7 +1249,7 @@ HTML = '''
         </div><!-- end tab-content -->
         </div><!-- end resultArea -->
 
-        <div class="footer">© 2025 Task Dashboard v23 | Powered by Flask & Chart.js</div>
+        <div class="footer">© 2025 Task Dashboard v23 | Powered by Vince</div>
     </div>
 
     <!-- Modal -->
