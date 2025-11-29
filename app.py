@@ -985,7 +985,7 @@ HTML = '''
                                 <div class="card-header">
                                     <span class="card-header-title"><i class="bi bi-envelope me-1"></i>郵件列表</span>
                                     <div class="d-flex align-items-center">
-                                        <small id="reviewMailCountDetail" class="text-white-50 me-2"></small>
+                                        <span id="reviewMailCountDetail" class="badge bg-info text-white me-2" style="font-size:0.7rem;"></span>
                                         <i class="bi bi-arrows-fullscreen card-maximize-btn text-white" onclick="toggleFullscreen('cardMailList')" title="最大化/還原"></i>
                                     </div>
                                 </div>
@@ -1375,10 +1375,22 @@ HTML = '''
                         selectedStore = node.store_id;
                         document.getElementById('selectedFolder').textContent = node.name;
                         
-                        // 在 Review 模式下自動載入郵件列表
-                        if (reviewModeActive) {
-                            await loadMailsForReview(true);  // 重新載入
+                        // 點擊資料夾時，直接載入郵件（不套用日期篩選）並切換到 Review
+                        useUploadedMails = false;
+                        await loadFolderMailsDirect(true);
+                        
+                        // 顯示結果區域和 Review 頁籤
+                        showResultArea();
+                        document.getElementById('tabItem-stats').style.display = 'none';  // 隱藏統計
+                        document.getElementById('tabItem-review').style.display = 'block';
+                        
+                        // 切換到 Review 頁籤
+                        const reviewTab = document.getElementById('tab-review');
+                        if (reviewTab) {
+                            const bsTab = new bootstrap.Tab(reviewTab);
+                            bsTab.show();
                         }
+                        reviewModeActive = true;
                     };
                     li.appendChild(item);
                     
@@ -1480,6 +1492,9 @@ HTML = '''
             }
             
             document.getElementById('loading').style.display = 'flex';
+            
+            // 重設直接模式（使用日期篩選）
+            directFolderMode = false;
             
             try {
                 // Review 模式：使用與統計分析相同的 API，但不套用分析選項（不排除 Middle priority、不排除下午 5 點後）
@@ -1633,6 +1648,9 @@ HTML = '''
             const mailList = document.getElementById('mailList');
             if (reset) {
                 mailList.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm text-primary"></div> 載入中...</div>';
+            } else {
+                // 使用者捲動載入時，在底部顯示 loading
+                showMailListLoading();
             }
             
             try {
@@ -1671,24 +1689,183 @@ HTML = '''
                 // 應用篩選
                 applyMailFilters();
                 
+                // 隱藏底部 loading
+                hideMailListLoading();
+                
             } catch (e) {
                 console.error('載入郵件失敗:', e);
                 if (reset) {
                     mailList.innerHTML = '<div class="text-center text-danger p-3">載入失敗: ' + e.message + '</div>';
                 }
+                hideMailListLoading();
             }
             
             reviewMailsLoading = false;
         }
         
-        // 更新 Review 模式計數
+        // 直接載入資料夾郵件（不套用日期篩選）- 用於點擊資料夾
+        let folderMailsTotal = 0;
+        let folderMailsLoaded = 0;
+        let folderMailsLoading = false;
+        let directFolderMode = false;  // 標記是否為直接載入模式
+        let backgroundLoadTimer = null;  // 背景載入定時器
+        
+        async function loadFolderMailsDirect(reset = false, isBackgroundLoad = false) {
+            if (!selectedEntry || folderMailsLoading) return;
+            if (useUploadedMails) return;
+            
+            if (reset) {
+                allMails = [];
+                allMailsOriginal = [];
+                folderMailsLoaded = 0;
+                folderMailsTotal = 0;
+                directFolderMode = true;
+                // 清除背景載入定時器
+                if (backgroundLoadTimer) {
+                    clearTimeout(backgroundLoadTimer);
+                    backgroundLoadTimer = null;
+                }
+            }
+            
+            if (!reset && folderMailsLoaded >= folderMailsTotal && folderMailsTotal > 0) return;
+            
+            folderMailsLoading = true;
+            
+            const mailList = document.getElementById('mailList');
+            if (reset) {
+                mailList.innerHTML = '<div class="text-center p-3"><div class="spinner-border spinner-border-sm text-primary"></div> 載入中...</div>';
+            } else if (!isBackgroundLoad) {
+                // 使用者捲動載入時，在底部顯示 loading
+                showMailListLoading();
+            }
+            
+            try {
+                const r = await fetch('/api/folder-mails', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        entry_id: selectedEntry, 
+                        store_id: selectedStore,
+                        offset: folderMailsLoaded,
+                        limit: REVIEW_PAGE_SIZE
+                    }) 
+                });
+                
+                const contentType = r.headers.get('content-type');
+                if (!contentType || !contentType.includes('application/json')) {
+                    throw new Error('伺服器返回非 JSON 格式');
+                }
+                
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                
+                folderMailsTotal = data.total || 0;
+                folderMailsLoaded += (data.mails || []).length;
+                
+                if (reset) {
+                    allMailsOriginal = data.mails || [];
+                } else {
+                    allMailsOriginal = allMailsOriginal.concat(data.mails || []);
+                }
+                
+                // 直接模式不套用篩選
+                allMails = [...allMailsOriginal];
+                renderMailList();
+                updateFolderMailCount();
+                
+                // 隱藏底部 loading
+                hideMailListLoading();
+                
+                // 啟動背景載入（如果還有更多）
+                if (folderMailsLoaded < folderMailsTotal) {
+                    scheduleBackgroundLoad();
+                }
+                
+            } catch (e) {
+                console.error('載入資料夾郵件失敗:', e);
+                if (reset) {
+                    mailList.innerHTML = '<div class="text-center text-danger p-3">載入失敗: ' + e.message + '</div>';
+                }
+                hideMailListLoading();
+            }
+            
+            folderMailsLoading = false;
+        }
+        
+        // 背景載入排程
+        function scheduleBackgroundLoad() {
+            if (backgroundLoadTimer) return;  // 已有排程
+            if (!directFolderMode) return;
+            if (folderMailsLoaded >= folderMailsTotal) return;
+            
+            backgroundLoadTimer = setTimeout(() => {
+                backgroundLoadTimer = null;
+                if (directFolderMode && !folderMailsLoading && folderMailsLoaded < folderMailsTotal) {
+                    console.log('[Background] Loading more...', folderMailsLoaded, '/', folderMailsTotal);
+                    loadFolderMailsDirect(false, true);  // 背景載入
+                }
+            }, 500);  // 500ms 後載入下一批
+        }
+        
+        // 顯示郵件列表底部 loading
+        function showMailListLoading() {
+            const mailList = document.getElementById('mailList');
+            let loadingEl = document.getElementById('mailListLoading');
+            if (!loadingEl) {
+                loadingEl = document.createElement('div');
+                loadingEl.id = 'mailListLoading';
+                loadingEl.className = 'text-center p-2';
+                loadingEl.style.cssText = 'background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%); border-top: 1px solid #90caf9;';
+                loadingEl.innerHTML = '<div class="spinner-border spinner-border-sm text-primary me-2"></div><span class="text-primary">載入更多郵件中...</span>';
+                mailList.appendChild(loadingEl);
+            }
+            loadingEl.style.display = 'block';
+        }
+        
+        // 隱藏郵件列表底部 loading
+        function hideMailListLoading() {
+            const loadingEl = document.getElementById('mailListLoading');
+            if (loadingEl) {
+                loadingEl.style.display = 'none';
+            }
+        }
+        
+        function updateFolderMailCount() {
+            const countEl = document.getElementById('reviewMailCount');
+            const countDetailEl = document.getElementById('reviewMailCountDetail');
+            // 黃色 badge 顯示總數
+            if (countEl) countEl.textContent = folderMailsTotal;
+            // 藍色 badge 顯示已載入/總數
+            if (countDetailEl) {
+                countDetailEl.textContent = `已載入 ${folderMailsLoaded} / ${folderMailsTotal} 封`;
+                // 如果還沒載入完，顯示更醒目的顏色
+                if (folderMailsLoaded < folderMailsTotal) {
+                    countDetailEl.className = 'badge bg-info text-white me-2';
+                    countDetailEl.style.fontSize = '0.7rem';
+                } else {
+                    countDetailEl.className = 'badge bg-success text-white me-2';
+                    countDetailEl.style.fontSize = '0.7rem';
+                }
+            }
+        }
+        
+        // 更新 Review 模式計數（篩選模式）
         function updateReviewCount() {
             const countEl = document.getElementById('reviewMailCount');
             const countDetailEl = document.getElementById('reviewMailCountDetail');
-            const text = `${allMails.length}`;
-            const detail = `已載入 ${allMailsOriginal.length} / ${reviewMailsTotal} 封`;
-            if (countEl) countEl.textContent = text;
-            if (countDetailEl) countDetailEl.textContent = detail;
+            // 黃色 badge 顯示總數
+            if (countEl) countEl.textContent = reviewMailsTotal;
+            // 藍色 badge 顯示已載入/總數
+            if (countDetailEl) {
+                countDetailEl.textContent = `已載入 ${allMailsOriginal.length} / ${reviewMailsTotal} 封`;
+                if (allMailsOriginal.length < reviewMailsTotal) {
+                    countDetailEl.className = 'badge bg-info text-white me-2';
+                    countDetailEl.style.fontSize = '0.7rem';
+                } else {
+                    countDetailEl.className = 'badge bg-success text-white me-2';
+                    countDetailEl.style.fontSize = '0.7rem';
+                }
+            }
         }
         
         // 滾動載入節流
@@ -1698,8 +1875,6 @@ HTML = '''
         // 滾動載入更多
         function onMailListScroll(e) {
             if (!reviewModeActive || useUploadedMails) return;
-            if (reviewMailsLoading) return;  // 正在載入中，直接返回
-            if (reviewMailsLoaded >= reviewMailsTotal) return;  // 已載入全部
             
             const now = Date.now();
             if (now - lastScrollTime < 300) return;  // 300ms 節流
@@ -1708,8 +1883,19 @@ HTML = '''
             // 當滾動到底部 150px 內時載入更多
             if (el.scrollHeight - el.scrollTop - el.clientHeight < 150) {
                 lastScrollTime = now;
-                console.log('[Scroll] Loading more...', reviewMailsLoaded, '/', reviewMailsTotal);
-                loadMailsForReview(false);
+                
+                // 根據模式選擇載入方式
+                if (directFolderMode) {
+                    if (folderMailsLoading) return;
+                    if (folderMailsLoaded >= folderMailsTotal) return;
+                    console.log('[Scroll] Loading more (direct)...', folderMailsLoaded, '/', folderMailsTotal);
+                    loadFolderMailsDirect(false);
+                } else {
+                    if (reviewMailsLoading) return;
+                    if (reviewMailsLoaded >= reviewMailsTotal) return;
+                    console.log('[Scroll] Loading more (filtered)...', reviewMailsLoaded, '/', reviewMailsTotal);
+                    loadMailsForReview(false);
+                }
             }
         }
 
@@ -1718,8 +1904,9 @@ HTML = '''
             if (!selectedEntry) { alert('請選擇資料夾'); return; }
             document.getElementById('loading').style.display = 'flex';
             
-            // 使用 Outlook 分析，重置上傳標誌
+            // 使用 Outlook 分析，重置上傳標誌和直接模式
             useUploadedMails = false;
+            directFolderMode = false;  // 使用篩選模式
             
             const excludeMiddlePriority = document.getElementById('excludeMiddlePriority').checked;
             const excludeAfter5pm = document.getElementById('excludeAfter5pm').checked;
@@ -2483,8 +2670,9 @@ HTML = '''
                 // 判斷附件：優先用 attachments 陣列，其次用 has_attachments 或 attachment_count
                 const hasAtt = (m.attachments && m.attachments.length > 0) || m.has_attachments || (m.attachment_count > 0);
                 const mailId = m.mail_id || '';
-                // 使用統一的附件圖示函數，點擊可開啟 Mail 預覽
-                const attIcons = hasAtt ? getAttachmentIcons(m.attachments, m.has_attachments, mailId) : '';
+                
+                // 使用統一的附件圖示函數
+                const attIcons = hasAtt ? getAttachmentIcons(m.attachments, hasAtt, mailId) : '';
                 
                 return `
                 <div class="mail-item" onclick="selectMail(${i})" data-mail-id="${mailId}">
@@ -2496,11 +2684,18 @@ HTML = '''
                 </div>
             `}).join('');
             
-            // 如果還有更多未載入，顯示提示
-            if (reviewMailsLoaded < reviewMailsTotal && !search) {
+            // 根據模式判斷是否還有更多未載入
+            const hasMore = directFolderMode 
+                ? (folderMailsLoaded < folderMailsTotal) 
+                : (reviewMailsLoaded < reviewMailsTotal);
+            const isLoading = directFolderMode ? folderMailsLoading : reviewMailsLoading;
+            const loaded = directFolderMode ? folderMailsLoaded : reviewMailsLoaded;
+            const total = directFolderMode ? folderMailsTotal : reviewMailsTotal;
+            
+            if (hasMore && !search) {
                 html += `<div class="text-center p-2 text-muted small" id="loadMoreHint">
-                    <span class="spinner-border spinner-border-sm me-1" style="display:${reviewMailsLoading ? 'inline-block' : 'none'}"></span>
-                    向下滾動載入更多... (${reviewMailsLoaded}/${reviewMailsTotal})
+                    <span class="spinner-border spinner-border-sm me-1" style="display:${isLoading ? 'inline-block' : 'none'}"></span>
+                    向下滾動載入更多... (${loaded}/${total})
                 </div>`;
             }
             
@@ -4778,6 +4973,146 @@ def api_review_mails():
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/folder-mails', methods=['POST'])
+def api_folder_mails():
+    """直接載入資料夾郵件（不套用日期篩選）- 用於點擊資料夾"""
+    global MAIL_CONTENTS, MAIL_ENTRIES
+    
+    if not HAS_OUTLOOK:
+        return jsonify({'error': 'Outlook not available'}), 500
+    
+    data = request.json or {}
+    entry_id = data.get('entry_id')
+    store_id = data.get('store_id')
+    offset = data.get('offset', 0)
+    limit = data.get('limit', 100)
+    
+    print(f"[Folder] Direct load: offset={offset}, limit={limit}")
+    
+    if not entry_id:
+        return jsonify({'error': 'No folder selected'}), 400
+    
+    try:
+        outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+        folder = outlook.GetFolderFromID(entry_id, store_id) if store_id else outlook.GetFolderFromID(entry_id)
+        
+        items = folder.Items
+        items.Sort("[ReceivedTime]", True)  # 降序排列（最新的在前）
+        
+        # 不套用日期篩選，直接取得所有郵件
+        try:
+            total_count = items.Count
+        except:
+            total_count = 0
+            
+        print(f"[Folder] Total items: {total_count}")
+        
+        mails = []
+        
+        if total_count == 0:
+            return jsonify({
+                'mails': [],
+                'total': 0,
+                'offset': offset,
+                'limit': limit,
+                'has_more': False
+            })
+        
+        # 分頁載入
+        start_idx = offset + 1  # Outlook 是 1-based
+        end_idx = min(offset + limit, total_count)
+        
+        import hashlib
+        error_count = 0
+        for i in range(start_idx, end_idx + 1):
+            try:
+                msg = items.Item(i)
+                if not hasattr(msg, 'Subject'):
+                    continue
+                
+                mail_date_str = ""
+                mail_time_str = ""
+                try:
+                    mail_time = msg.ReceivedTime
+                    if mail_time:
+                        mail_date_str = mail_time.strftime("%Y-%m-%d")
+                        mail_time_str = mail_time.strftime("%H:%M")
+                except:
+                    try:
+                        mail_time = msg.SentOn
+                        if mail_time:
+                            mail_date_str = mail_time.strftime("%Y-%m-%d")
+                            mail_time_str = mail_time.strftime("%H:%M")
+                    except:
+                        pass
+                
+                mail_id = hashlib.md5(f"{mail_date_str}_{mail_time_str}_{msg.Subject or ''}".encode()).hexdigest()[:12]
+                
+                try:
+                    MAIL_ENTRIES[mail_id] = {
+                        "entry_id": msg.EntryID,
+                        "store_id": store_id
+                    }
+                except:
+                    pass
+                
+                # 取得附件資訊（包含檔名，用於顯示圖示）
+                attachments = []
+                try:
+                    if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
+                        for j in range(1, msg.Attachments.Count + 1):
+                            try:
+                                att = msg.Attachments.Item(j)
+                                att_name = str(att.FileName) if hasattr(att, 'FileName') else f"attachment_{j}"
+                                attachments.append({
+                                    "index": j,
+                                    "name": att_name
+                                })
+                            except:
+                                pass
+                except:
+                    pass
+                
+                recipient = ""
+                try:
+                    if hasattr(msg, 'To'):
+                        recipient = str(msg.To)
+                except:
+                    pass
+                
+                mails.append({
+                    "mail_id": mail_id,
+                    "subject": msg.Subject or "(無主旨)",
+                    "date": mail_date_str,
+                    "time": mail_time_str,
+                    "sender": str(msg.SenderName) if hasattr(msg, 'SenderName') else "",
+                    "recipient": recipient,
+                    "attachment_count": len(attachments),
+                    "attachments": attachments
+                })
+            except Exception as item_err:
+                error_count += 1
+                if error_count <= 3:
+                    print(f"Error reading item {i}: {item_err}")
+                continue
+        
+        print(f"[Folder] Loaded {len(mails)} mails")
+        
+        return jsonify({
+            'mails': mails,
+            'total': total_count,
+            'offset': offset,
+            'limit': limit,
+            'has_more': end_idx < total_count
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
 
 # 附件資訊 API（需要另外處理實際下載）
 @app.route('/api/mail/<mail_id>/attachments')
