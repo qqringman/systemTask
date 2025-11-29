@@ -2462,27 +2462,27 @@ HTML = '''
             const mail = allMails[index];
             if (!mail) return;
             
-            console.log('[selectMail] mail:', mail.mail_id, 'html_body exists:', !!mail.html_body, 'attachments:', mail.attachments?.length || 0);
+            console.log('[selectMail] mail:', mail.mail_id, 'html_body exists:', !!mail.html_body, 'cid_processed:', !!mail.cid_processed, 'attachments:', mail.attachments?.length || 0);
             
             document.getElementById('mailHeader').style.display = 'block';
             document.getElementById('mailSubjectView').textContent = mail.subject || '-';
             document.getElementById('mailDateView').textContent = `${mail.date} ${mail.time || ''}`;
             
-            // 如果已有完整內容（HTML 和附件資訊）則直接顯示
-            if (mail.html_body && mail.html_body.length > 0 && mail.attachments !== undefined) {
-                console.log('[selectMail] Using existing data');
+            // 如果已有完整內容且已處理過 CID 圖片，則直接顯示
+            if (mail.html_body && mail.html_body.length > 0 && mail.cid_processed && mail.attachments !== undefined) {
+                console.log('[selectMail] Using existing data (CID processed)');
                 displayMailContent(mail);
                 return;
             }
             
-            // 否則從 API 取得完整內容（包含附件資訊）
+            // 否則從 API 取得完整內容（包含 CID 處理後的 html_body 和附件資訊）
             if (mail.mail_id) {
                 try {
                     console.log('[selectMail] Fetching from API:', mail.mail_id);
                     const r = await fetch(`/api/mail/${mail.mail_id}`);
                     if (r.ok) {
                         const fullMail = await r.json();
-                        console.log('[selectMail] API response html_body len:', (fullMail.html_body || '').length, 'attachments:', fullMail.attachments?.length || 0);
+                        console.log('[selectMail] API response html_body len:', (fullMail.html_body || '').length, 'cid_processed:', fullMail.cid_processed, 'attachments:', fullMail.attachments?.length || 0);
                         // 更新本地資料
                         allMails[index] = { ...mail, ...fullMail };
                         displayMailContent(allMails[index]);
@@ -4172,15 +4172,62 @@ def api_upload():
                     mail_time = msg.ReceivedTime if hasattr(msg, 'ReceivedTime') else msg.SentOn
                     sender = str(msg.SenderName) if hasattr(msg, 'SenderName') else ""
                     
-                    # 取得附件資訊
-                    if hasattr(msg, 'Attachments'):
+                    # 取得附件資訊並處理 CID 圖片，同時保存 Base64 供匯出使用
+                    cid_images = {}
+                    if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
+                        import base64
+                        import re
+                        import mimetypes
+                        
                         for i in range(1, msg.Attachments.Count + 1):
                             att = msg.Attachments.Item(i)
+                            att_name = att.FileName if hasattr(att, 'FileName') else f"attachment_{i}"
+                            att_size = att.Size if hasattr(att, 'Size') else 0
+                            
+                            # 檢查 Content-ID
+                            content_id = ""
+                            try:
+                                content_id = att.PropertyAccessor.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F")
+                            except:
+                                pass
+                            
+                            # 儲存附件並讀取 Base64（供匯出 HTML 使用）
+                            att_b64_data = ""
+                            att_mime_type = ""
+                            try:
+                                att_tmp = tempfile.mktemp(suffix=os.path.splitext(att_name)[1])
+                                att.SaveAsFile(att_tmp)
+                                with open(att_tmp, 'rb') as attf:
+                                    att_data = attf.read()
+                                os.unlink(att_tmp)
+                                
+                                att_b64_data = base64.b64encode(att_data).decode('utf-8')
+                                att_mime_type, _ = mimetypes.guess_type(att_name)
+                                if not att_mime_type:
+                                    att_mime_type = 'application/octet-stream'
+                            except Exception as att_err:
+                                print(f"[Upload] Error reading attachment {att_name}: {att_err}")
+                            
+                            # 如果是圖片且有 Content-ID，處理 CID
+                            is_image = att_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'))
+                            if is_image and content_id and att_b64_data:
+                                cid_key = content_id.strip('<>') if content_id else att_name
+                                cid_images[cid_key] = f"data:{att_mime_type};base64,{att_b64_data}"
+                            
                             attachments_info.append({
                                 "index": i,
-                                "name": att.FileName if hasattr(att, 'FileName') else f"attachment_{i}",
-                                "size": att.Size if hasattr(att, 'Size') else 0
+                                "name": att_name,
+                                "size": att_size,
+                                "data": att_b64_data,  # Base64 資料供匯出使用
+                                "mime": att_mime_type
                             })
+                        
+                        # 替換 HTML 中的 cid: 連結
+                        if cid_images and html_body:
+                            for cid, data_url in cid_images.items():
+                                html_body = re.sub(f'src=["\']cid:{re.escape(cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                                html_body = re.sub(f'src=["\']cid:{re.escape(cid.split("@")[0] if "@" in cid else cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                            print(f"[Upload] Replaced {len(cid_images)} CID images")
                     
                     outlook_success = True
                     print(f"[Upload] Via Outlook COM: {subject[:50]}, HTML len={len(html_body)}")
@@ -4259,10 +4306,11 @@ def api_upload():
                     "html_body": html_body,
                     "date": mail_date_str,
                     "time": mail_time_str,
-                    "attachments": attachments_info
+                    "attachments": attachments_info,
+                    "cid_processed": True  # 已處理 CID 圖片
                 }
                 
-                parser.parse(subject, body, mail_date_str, mail_time_str, html_body, has_attachments)
+                parser.parse(subject, body, mail_date_str, mail_time_str, html_body, has_attachments, attachments_info, mail_id)
                 
                 mails.append({
                     "mail_id": mail_id,
@@ -4273,7 +4321,8 @@ def api_upload():
                     "time": mail_time_str,
                     "sender": sender,
                     "has_attachments": has_attachments,
-                    "attachments": attachments_info
+                    "attachments": attachments_info,
+                    "cid_processed": True  # 已處理 CID 圖片
                 })
                 
                 # 清理暫存檔
@@ -4295,13 +4344,17 @@ def api_upload():
         stats.add(t)
     LAST_RESULT = stats
     LAST_DATA = stats.summary()
+    LAST_MAILS_LIST = mails  # 儲存郵件列表供匯出用
     
     # 調試輸出
     print(f"[Upload] MAIL_CONTENTS has {len(MAIL_CONTENTS)} mails")
     for mid, mc in MAIL_CONTENTS.items():
         has_html = bool(mc.get('html_body'))
         html_len = len(mc.get('html_body', '')) if mc.get('html_body') else 0
-        print(f"  - {mid}: subject='{mc.get('subject', '')[:30]}', has_html={has_html}, html_len={html_len}")
+        has_att_data = any(a.get('data') for a in mc.get('attachments', []))
+        print(f"  - {mid}: has_html={has_html}, html_len={html_len}, has_att_data={has_att_data}")
+    
+    print(f"[Upload] LAST_MAILS_LIST has {len(LAST_MAILS_LIST)} mails")
     
     # 調試：檢查任務的 has_attachments
     print(f"[Upload] Tasks with attachments:")
@@ -4677,63 +4730,38 @@ def api_export_html():
     # 收集所有郵件的完整內容（包含 CID 處理後的 html_body 和附件 Base64）
     mail_contents_with_attachments = {}
     
-    # 先處理已快取的郵件
-    for mail_id, content in MAIL_CONTENTS.items():
-        mail_data = dict(content)  # 複製
+    # 遍歷所有郵件，確保每封都有經過 CID 處理的 html_body
+    for mail in LAST_MAILS_LIST:
+        mail_id = mail.get('mail_id')
+        if not mail_id:
+            continue
         
-        # 如果有附件，嘗試讀取 Base64 資料
-        if mail_id in MAIL_ENTRIES and mail_data.get('attachments'):
+        # 檢查是否已經有處理過的資料（來自 MAIL_CONTENTS 快取）
+        cached = MAIL_CONTENTS.get(mail_id)
+        if cached and cached.get('cid_processed'):
+            # 使用快取的資料（已處理 CID）
+            mail_contents_with_attachments[mail_id] = dict(cached)
+            print(f"[Export HTML] Mail {mail_id}: using cached data (cid_processed=True)")
+            continue
+        
+        # 檢查 mail 本身是否已處理過 CID（來自上傳）
+        if mail.get('cid_processed'):
+            mail_contents_with_attachments[mail_id] = {
+                "subject": mail.get('subject', ''),
+                "body": mail.get('body', ''),
+                "html_body": mail.get('html_body', ''),
+                "date": mail.get('date', ''),
+                "time": mail.get('time', ''),
+                "attachments": mail.get('attachments', []),
+                "cid_processed": True
+            }
+            print(f"[Export HTML] Mail {mail_id}: from LAST_MAILS_LIST (cid_processed=True)")
+            continue
+        
+        # 需要從 Outlook 重新讀取並處理 CID
+        if mail_id in MAIL_ENTRIES and HAS_OUTLOOK:
             try:
                 entry_info = MAIL_ENTRIES[mail_id]
-                outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
-                msg = outlook.GetItemFromID(entry_info['entry_id'], entry_info.get('store_id'))
-                
-                attachments_with_data = []
-                if hasattr(msg, 'Attachments'):
-                    for i, att_info in enumerate(mail_data['attachments']):
-                        att_idx = i + 1
-                        if att_idx <= msg.Attachments.Count:
-                            att = msg.Attachments.Item(att_idx)
-                            filename = att.FileName if hasattr(att, 'FileName') else f"attachment_{att_idx}"
-                            
-                            # 儲存到暫存並讀取 Base64
-                            import base64
-                            import mimetypes
-                            temp_path = os.path.join(tempfile.gettempdir(), f"export_att_{mail_id}_{att_idx}")
-                            att.SaveAsFile(temp_path)
-                            with open(temp_path, 'rb') as f:
-                                b64_data = base64.b64encode(f.read()).decode('utf-8')
-                            try:
-                                os.unlink(temp_path)
-                            except:
-                                pass
-                            
-                            mime_type, _ = mimetypes.guess_type(filename)
-                            if not mime_type:
-                                mime_type = 'application/octet-stream'
-                            
-                            attachments_with_data.append({
-                                'name': filename,
-                                'data': b64_data,
-                                'mime': mime_type
-                            })
-                        else:
-                            attachments_with_data.append(att_info)
-                
-                mail_data['attachments'] = attachments_with_data
-            except Exception as e:
-                print(f"[Export HTML] Error reading attachments for {mail_id}: {e}")
-        
-        mail_contents_with_attachments[mail_id] = mail_data
-    
-    # 再處理尚未快取但有 entry_id 的郵件（從 MAIL_ENTRIES 載入）
-    if HAS_OUTLOOK:
-        for mail_id, entry_info in MAIL_ENTRIES.items():
-            if mail_id in mail_contents_with_attachments:
-                continue  # 已處理過
-            
-            try:
-                print(f"[Export HTML] Loading mail content for {mail_id}")
                 outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
                 msg = outlook.GetItemFromID(entry_info['entry_id'], entry_info.get('store_id'))
                 
@@ -4749,7 +4777,6 @@ def api_export_html():
                     pass
                 
                 # 處理 CID 圖片和附件
-                attachments = []
                 cid_images = {}
                 attachments_with_data = []
                 
@@ -4771,30 +4798,31 @@ def api_export_html():
                             pass
                         
                         # 儲存並讀取 Base64
-                        temp_path = os.path.join(tempfile.gettempdir(), f"export_att_{mail_id}_{j}")
-                        att.SaveAsFile(temp_path)
-                        with open(temp_path, 'rb') as f:
-                            b64_data = base64.b64encode(f.read()).decode('utf-8')
+                        att_b64 = ""
+                        att_mime = "application/octet-stream"
                         try:
+                            temp_path = os.path.join(tempfile.gettempdir(), f"export_att_{mail_id}_{j}")
+                            att.SaveAsFile(temp_path)
+                            with open(temp_path, 'rb') as f:
+                                att_b64 = base64.b64encode(f.read()).decode('utf-8')
                             os.unlink(temp_path)
-                        except:
-                            pass
-                        
-                        # 判斷 MIME 類型
-                        mime_type, _ = mimetypes.guess_type(att_name)
-                        if not mime_type:
-                            mime_type = 'application/octet-stream'
+                            att_mime, _ = mimetypes.guess_type(att_name)
+                            if not att_mime:
+                                att_mime = 'application/octet-stream'
+                        except Exception as att_err:
+                            print(f"[Export HTML] Error reading attachment {att_name}: {att_err}")
                         
                         # 處理 CID 圖片
                         is_image = att_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'))
-                        if is_image and (content_id or 'image' in str(getattr(att, 'Type', '')).lower()):
+                        if is_image and content_id and att_b64:
                             cid_key = content_id.strip('<>') if content_id else att_name
-                            cid_images[cid_key] = f"data:{mime_type};base64,{b64_data}"
+                            cid_images[cid_key] = f"data:{att_mime};base64,{att_b64}"
                         
                         attachments_with_data.append({
                             'name': att_name,
-                            'data': b64_data,
-                            'mime': mime_type
+                            'size': att_size,
+                            'data': att_b64,
+                            'mime': att_mime
                         })
                     
                     # 替換 HTML 中的 cid: 連結
@@ -4802,6 +4830,7 @@ def api_export_html():
                         for cid, data_url in cid_images.items():
                             html_body = re.sub(f'src=["\']cid:{re.escape(cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
                             html_body = re.sub(f'src=["\']cid:{re.escape(cid.split("@")[0] if "@" in cid else cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                        print(f"[Export HTML] Mail {mail_id}: replaced {len(cid_images)} CID images")
                 
                 mail_time = None
                 try:
@@ -4813,16 +4842,49 @@ def api_export_html():
                         pass
                 
                 mail_contents_with_attachments[mail_id] = {
-                    "subject": msg.Subject or "",
+                    "subject": msg.Subject or mail.get('subject', ''),
                     "body": body,
                     "html_body": html_body,
-                    "date": mail_time.strftime("%Y-%m-%d") if mail_time else "",
-                    "time": mail_time.strftime("%H:%M") if mail_time else "",
-                    "attachments": attachments_with_data
+                    "date": mail_time.strftime("%Y-%m-%d") if mail_time else mail.get('date', ''),
+                    "time": mail_time.strftime("%H:%M") if mail_time else mail.get('time', ''),
+                    "attachments": attachments_with_data,
+                    "cid_processed": True
                 }
+                print(f"[Export HTML] Mail {mail_id}: loaded from Outlook with CID processing")
                 
             except Exception as e:
                 print(f"[Export HTML] Error loading mail {mail_id}: {e}")
+                # 使用原始資料（沒有 CID 處理）
+                mail_contents_with_attachments[mail_id] = {
+                    "subject": mail.get('subject', ''),
+                    "body": mail.get('body', ''),
+                    "html_body": mail.get('html_body', ''),
+                    "date": mail.get('date', ''),
+                    "time": mail.get('time', ''),
+                    "attachments": mail.get('attachments', []),
+                    "cid_processed": False
+                }
+        else:
+            # 沒有 MAIL_ENTRIES，使用原始資料
+            mail_contents_with_attachments[mail_id] = {
+                "subject": mail.get('subject', ''),
+                "body": mail.get('body', ''),
+                "html_body": mail.get('html_body', ''),
+                "date": mail.get('date', ''),
+                "time": mail.get('time', ''),
+                "attachments": mail.get('attachments', []),
+                "cid_processed": False
+            }
+            print(f"[Export HTML] Mail {mail_id}: using original data (no MAIL_ENTRIES)")
+    
+    print(f"[Export HTML] Total mails in export: {len(mail_contents_with_attachments)}")
+    for mid, mc in mail_contents_with_attachments.items():
+        has_html = bool(mc.get('html_body'))
+        html_len = len(mc.get('html_body', '')) if mc.get('html_body') else 0
+        cid_proc = mc.get('cid_processed', False)
+        atts = mc.get('attachments', [])
+        has_att_data = any(a.get('data') for a in atts) if atts else False
+        print(f"  - {mid}: html_len={html_len}, cid_processed={cid_proc}, atts={len(atts)}, has_att_data={has_att_data}")
     
     # 使用主頁面模板，但注入預載數據
     import json
