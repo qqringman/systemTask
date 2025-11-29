@@ -789,7 +789,7 @@ HTML = '''
         .mail-item.selected { background: #e3f2fd; }
         .mail-subject { font-weight: 500; }
         .mail-meta { font-size: 0.75rem; color: #666; }
-        .mail-preview { max-height: 60vh; overflow-y: auto; padding: 15px; background: #fff; }
+        .mail-preview { max-height: 60vh; overflow-y: auto; padding: 0; background: #fff; }
         
         /* 頁籤樣式 */
         .nav-tabs { border-bottom: none; }
@@ -802,15 +802,16 @@ HTML = '''
         .card-maximize-btn:hover { opacity: 1; }
         .card-fullscreen { position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; max-height: 100vh !important; z-index: 9999; border-radius: 0 !important; margin: 0 !important; display: flex !important; flex-direction: column !important; }
         .card-fullscreen > .card-header { flex-shrink: 0 !important; }
-        .card-fullscreen > .card-body, .card-fullscreen .card-body { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; overflow: auto !important; display: flex !important; flex-direction: column !important; }
+        .card-fullscreen > .card-body, .card-fullscreen .card-body { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; }
         .card-fullscreen .table-container { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; }
         .card-fullscreen .chart-container { flex: 1 !important; height: 0 !important; min-height: 0 !important; }
         .card-fullscreen #mailList { flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; }
-        /* 郵件內容卡片最大化 - 使用 position 讓 iframe 填滿父容器 */
+        /* 郵件內容卡片最大化 - 關鍵：移除 max-height 限制 */
         .card-fullscreen #mailHeader { flex-shrink: 0 !important; }
-        .card-fullscreen #mailContentHtml { flex: 1 !important; min-height: 0 !important; overflow: hidden !important; position: relative !important; }
-        .card-fullscreen #mailContentText { flex: 1 !important; min-height: 0 !important; overflow-y: auto !important; }
+        .card-fullscreen #mailContentHtml { flex: 1 !important; min-height: 0 !important; max-height: none !important; overflow: hidden !important; position: relative !important; }
+        .card-fullscreen #mailContentText { flex: 1 !important; min-height: 0 !important; max-height: none !important; overflow-y: auto !important; }
         .card-fullscreen #mailIframe { position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }
+        .card-fullscreen .mail-preview { max-height: none !important; }
         .fullscreen-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 9998; display: none; }
     </style>
 </head>
@@ -2944,11 +2945,12 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         .card-maximize-btn:hover {{ opacity: 1; }}
         .card-fullscreen {{ position: fixed !important; top: 0 !important; left: 0 !important; width: 100vw !important; height: 100vh !important; z-index: 9999; border-radius: 0 !important; margin: 0 !important; display: flex !important; flex-direction: column !important; }}
         .card-fullscreen > .card-header {{ flex-shrink: 0 !important; }}
-        .card-fullscreen > .card-body, .card-fullscreen .card-body {{ flex: 1 !important; height: 0 !important; min-height: 0 !important; overflow: auto !important; display: flex !important; flex-direction: column !important; }}
+        .card-fullscreen > .card-body, .card-fullscreen .card-body {{ flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; overflow: hidden !important; display: flex !important; flex-direction: column !important; }}
         .card-fullscreen .table-container {{ flex: 1 !important; height: 0 !important; min-height: 0 !important; max-height: none !important; }}
         .card-fullscreen .chart-container {{ flex: 1 !important; min-height: 0 !important; }}
-        .card-fullscreen #mailContentHtml {{ flex: 1 !important; min-height: 0 !important; overflow: hidden !important; position: relative !important; }}
+        .card-fullscreen #mailContentHtml {{ flex: 1 !important; min-height: 0 !important; max-height: none !important; overflow: hidden !important; position: relative !important; }}
         .card-fullscreen #mailIframe {{ position: absolute !important; top: 0 !important; left: 0 !important; width: 100% !important; height: 100% !important; border: none !important; }}
+        .card-fullscreen .mail-preview {{ max-height: none !important; }}
         .fullscreen-overlay {{ position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.5); z-index: 9998; display: none; }}
         
         /* 頁籤樣式 */
@@ -3300,10 +3302,10 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                             <button class="btn btn-outline-secondary" onclick="setMailView('text')" id="btnText">純文字</button>
                         </div>
                     </div>
-                    <div id="mailBodyHtmlPreview" style="height:60vh;overflow:hidden;">
+                    <div id="mailBodyHtml" style="height:60vh;overflow:hidden;">
                         <iframe id="mailPreviewIframe" style="width:100%;height:100%;border:none;"></iframe>
                     </div>
-                    <div id="mailBodyTextPreview" style="max-height:60vh;overflow-y:auto;padding:15px;font-family:monospace;font-size:13px;white-space:pre-wrap;background:#fafafa;display:none;"></div>
+                    <div id="mailBodyText" style="max-height:60vh;overflow-y:auto;padding:15px;font-family:monospace;font-size:13px;white-space:pre-wrap;background:#fafafa;display:none;"></div>
                 </div>
                 <div class="modal-footer py-1">
                     <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">關閉</button>
@@ -3716,7 +3718,7 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
                 const textAsHtml = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Segoe UI,Arial,sans-serif;font-size:14px;padding:20px;}}</style></head><body><pre style="white-space:pre-wrap;">${{escapeHtml(mail.body || '')}}</pre></body></html>`;
                 document.getElementById('mailPreviewIframe').srcdoc = textAsHtml;
             }}
-            document.getElementById('mailBodyTextPreview').textContent = mail.body || '';
+            document.getElementById('mailBodyText').textContent = mail.body || '';
             
             new bootstrap.Modal(document.getElementById('mailModal')).show();
         }}
@@ -3730,8 +3732,8 @@ def generate_export_html(data, report_date, mail_contents=None, mails_list=None)
         }}
         
         function setMailView(mode) {{
-            document.getElementById('mailBodyHtmlPreview').style.display = mode === 'html' ? 'block' : 'none';
-            document.getElementById('mailBodyTextPreview').style.display = mode === 'text' ? 'block' : 'none';
+            document.getElementById('mailBodyHtml').style.display = mode === 'html' ? 'block' : 'none';
+            document.getElementById('mailBodyText').style.display = mode === 'text' ? 'block' : 'none';
             document.getElementById('btnHtml').classList.toggle('active', mode === 'html');
             document.getElementById('btnText').classList.toggle('active', mode === 'text');
         }}
@@ -4670,9 +4672,12 @@ def api_export_html():
     # 調試輸出
     print(f"[Export HTML] MAIL_CONTENTS has {len(MAIL_CONTENTS)} mails")
     print(f"[Export HTML] LAST_MAILS_LIST has {len(LAST_MAILS_LIST)} mails")
+    print(f"[Export HTML] MAIL_ENTRIES has {len(MAIL_ENTRIES)} entries")
     
-    # 收集附件的 Base64 資料用於離線下載
+    # 收集所有郵件的完整內容（包含 CID 處理後的 html_body 和附件 Base64）
     mail_contents_with_attachments = {}
+    
+    # 先處理已快取的郵件
     for mail_id, content in MAIL_CONTENTS.items():
         mail_data = dict(content)  # 複製
         
@@ -4720,6 +4725,104 @@ def api_export_html():
                 print(f"[Export HTML] Error reading attachments for {mail_id}: {e}")
         
         mail_contents_with_attachments[mail_id] = mail_data
+    
+    # 再處理尚未快取但有 entry_id 的郵件（從 MAIL_ENTRIES 載入）
+    if HAS_OUTLOOK:
+        for mail_id, entry_info in MAIL_ENTRIES.items():
+            if mail_id in mail_contents_with_attachments:
+                continue  # 已處理過
+            
+            try:
+                print(f"[Export HTML] Loading mail content for {mail_id}")
+                outlook = win32com.client.Dispatch("Outlook.Application").GetNamespace("MAPI")
+                msg = outlook.GetItemFromID(entry_info['entry_id'], entry_info.get('store_id'))
+                
+                body = ""
+                html_body = ""
+                try:
+                    body = msg.Body or ""
+                except:
+                    pass
+                try:
+                    html_body = msg.HTMLBody or ""
+                except:
+                    pass
+                
+                # 處理 CID 圖片和附件
+                attachments = []
+                cid_images = {}
+                attachments_with_data = []
+                
+                if hasattr(msg, 'Attachments') and msg.Attachments.Count > 0:
+                    import base64
+                    import re
+                    import mimetypes
+                    
+                    for j in range(1, msg.Attachments.Count + 1):
+                        att = msg.Attachments.Item(j)
+                        att_name = att.FileName if hasattr(att, 'FileName') else f"attachment_{j}"
+                        att_size = att.Size if hasattr(att, 'Size') else 0
+                        
+                        # 檢查 Content-ID
+                        content_id = ""
+                        try:
+                            content_id = att.PropertyAccessor.GetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F")
+                        except:
+                            pass
+                        
+                        # 儲存並讀取 Base64
+                        temp_path = os.path.join(tempfile.gettempdir(), f"export_att_{mail_id}_{j}")
+                        att.SaveAsFile(temp_path)
+                        with open(temp_path, 'rb') as f:
+                            b64_data = base64.b64encode(f.read()).decode('utf-8')
+                        try:
+                            os.unlink(temp_path)
+                        except:
+                            pass
+                        
+                        # 判斷 MIME 類型
+                        mime_type, _ = mimetypes.guess_type(att_name)
+                        if not mime_type:
+                            mime_type = 'application/octet-stream'
+                        
+                        # 處理 CID 圖片
+                        is_image = att_name.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'))
+                        if is_image and (content_id or 'image' in str(getattr(att, 'Type', '')).lower()):
+                            cid_key = content_id.strip('<>') if content_id else att_name
+                            cid_images[cid_key] = f"data:{mime_type};base64,{b64_data}"
+                        
+                        attachments_with_data.append({
+                            'name': att_name,
+                            'data': b64_data,
+                            'mime': mime_type
+                        })
+                    
+                    # 替換 HTML 中的 cid: 連結
+                    if cid_images and html_body:
+                        for cid, data_url in cid_images.items():
+                            html_body = re.sub(f'src=["\']cid:{re.escape(cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                            html_body = re.sub(f'src=["\']cid:{re.escape(cid.split("@")[0] if "@" in cid else cid)}["\']', f'src="{data_url}"', html_body, flags=re.IGNORECASE)
+                
+                mail_time = None
+                try:
+                    mail_time = msg.ReceivedTime
+                except:
+                    try:
+                        mail_time = msg.SentOn
+                    except:
+                        pass
+                
+                mail_contents_with_attachments[mail_id] = {
+                    "subject": msg.Subject or "",
+                    "body": body,
+                    "html_body": html_body,
+                    "date": mail_time.strftime("%Y-%m-%d") if mail_time else "",
+                    "time": mail_time.strftime("%H:%M") if mail_time else "",
+                    "attachments": attachments_with_data
+                }
+                
+            except Exception as e:
+                print(f"[Export HTML] Error loading mail {mail_id}: {e}")
     
     # 使用主頁面模板，但注入預載數據
     import json
