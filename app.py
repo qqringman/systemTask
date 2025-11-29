@@ -2405,7 +2405,13 @@ HTML = '''
                     attachContainer.innerHTML = '<strong class="me-2">附件:</strong>' + mail.attachments.map(att => {
                         const name = att.name || 'attachment';
                         const icon = getFileIcon(name);
-                        return `<a href="/api/mail/${mailId}/attachment/${att.index}" class="badge bg-light text-dark me-1 text-decoration-none" style="cursor:pointer" title="點擊下載">${icon} ${name}</a>`;
+                        // 如果有 Base64 資料，使用 downloadAttachment；否則使用 API
+                        if (att.data) {
+                            const escapedName = name.replace(/'/g, "\\'");
+                            return `<span class="badge bg-light text-dark me-1" style="cursor:pointer" onclick="downloadAttachment('${escapedName}', '${att.data}', '${att.mime || 'application/octet-stream'}')" title="點擊下載">${icon} ${name}</span>`;
+                        } else {
+                            return `<a href="/api/mail/${mailId}/attachment/${att.index}" class="badge bg-light text-dark me-1 text-decoration-none" style="cursor:pointer" title="點擊下載">${icon} ${name}</a>`;
+                        }
                     }).join('');
                     attachContainer.style.display = 'block';
                 } else {
@@ -2441,6 +2447,25 @@ HTML = '''
         }
         
         function escapeHtml(text) { const div = document.createElement('div'); div.textContent = text; return div.innerHTML; }
+        
+        // 下載附件（Base64 資料）
+        function downloadAttachment(name, data, mime) {
+            const byteCharacters = atob(data);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], { type: mime || 'application/octet-stream' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = name;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
         
         function setMailView(mode) {
             document.getElementById('mailBodyHtml').style.display = mode === 'html' ? 'block' : 'none';
@@ -2549,9 +2574,15 @@ HTML = '''
             console.log('[displayMailContent] attachments:', mail.attachments, 'attachment_count:', mail.attachment_count);
             if (mail.attachments && mail.attachments.length > 0) {
                 attachmentsRow.style.display = 'block';
-                attachmentsList.innerHTML = mail.attachments.map(att => 
-                    `<a href="/api/mail/${mail.mail_id}/attachment/${att.index}" class="badge bg-primary me-1 text-decoration-none" style="cursor:pointer" title="${formatFileSize(att.size)} - 點擊下載"><i class="bi bi-download"></i> ${att.name}</a>`
-                ).join('');
+                attachmentsList.innerHTML = mail.attachments.map(att => {
+                    // 如果有 Base64 資料，使用 downloadAttachment；否則使用 API
+                    if (att.data) {
+                        const escapedName = (att.name || 'attachment').replace(/'/g, "\\'");
+                        return `<span class="badge bg-primary me-1" style="cursor:pointer" onclick="downloadAttachment('${escapedName}', '${att.data}', '${att.mime || 'application/octet-stream'}')" title="${formatFileSize(att.size)} - 點擊下載"><i class="bi bi-download"></i> ${att.name}</span>`;
+                    } else {
+                        return `<a href="/api/mail/${mail.mail_id}/attachment/${att.index}" class="badge bg-primary me-1 text-decoration-none" style="cursor:pointer" title="${formatFileSize(att.size)} - 點擊下載"><i class="bi bi-download"></i> ${att.name}</a>`;
+                    }
+                }).join('');
             } else {
                 attachmentsRow.style.display = 'none';
             }
@@ -4230,8 +4261,10 @@ def api_outlook():
 
 @app.route('/api/upload', methods=['POST'])
 def api_upload():
-    global LAST_RESULT, LAST_DATA, MAIL_CONTENTS
+    global LAST_RESULT, LAST_DATA, MAIL_CONTENTS, LAST_MAILS_LIST, MAIL_ENTRIES
     MAIL_CONTENTS.clear()
+    MAIL_ENTRIES.clear()  # 清除舊的 entry（上傳時不需要）
+    LAST_MAILS_LIST = []  # 清除舊的郵件列表
     
     exclude_middle_priority = request.form.get('exclude_middle_priority', 'true').lower() == 'true'
     exclude_after_5pm = request.form.get('exclude_after_5pm', 'true').lower() == 'true'
@@ -4984,6 +5017,8 @@ def api_export_html():
     # 使用主頁面模板，但注入預載數據
     import json
     report_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+    
+    print(f"[Export HTML] LAST_MAILS_LIST has {len(LAST_MAILS_LIST)} mails for Review tab")
     
     # 生成完整 HTML（包含統計分析和 Review 頁籤）
     html = generate_export_html(LAST_DATA, report_date, mail_contents_with_attachments, LAST_MAILS_LIST)
